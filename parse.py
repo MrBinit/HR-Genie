@@ -22,8 +22,6 @@ logging.basicConfig(
     ]
 )
 
-
-
 def pdf_parse(document_path: str, is_job_description=False) -> str:
     """Parses the PDF and saves as markdown-like plain text."""
     try:

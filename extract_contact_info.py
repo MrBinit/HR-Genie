@@ -6,20 +6,29 @@ def extract_email(text: str) -> str:
     return match.group(0) if match else None
 
 def extract_phone(text: str) -> str:
-    match = re.search(r'(\+?\d[\d\s\-\(\)]{8,}\d)', text)
-    return match.group(0) if match else None
-
-def extract_name(text: str) -> str:
-    # Heuristic: first line with at least 2 capitalized words
-    lines = text.splitlines()
-    for line in lines[:10]:
-        words = line.strip().split()
-        if len(words) >= 2 and all(w[0].isupper() for w in words[:2]):
-            return line.strip()
+    match = re.search(r'(\+?977[-\s]?)?(9\d{9})', text)
+    if match:
+        return f"{match.group(1) or ''}{match.group(2)}"
     return None
 
+def extract_name(text: str) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    skip_keywords = ["/", "http", "https", ".com"]
+
+    for line in lines[:2]:  # Only look at the first 2 lines
+        if any(k in line for k in skip_keywords):
+            continue
+        words = line.split()
+        capitalized = [w for w in words if w[0].isupper()]
+        if len(capitalized) >= 2:
+            return line
+
+    return None
+
+
+
 def extract_contact_info_from_resume(resume_path: Path) -> dict:
-    text = resume_path.read_text(encoding='utf-8')
+    text = resume_path.read_text(encoding='utf-8', errors='ignore')
 
     return {
         "name": extract_name(text),
@@ -27,12 +36,12 @@ def extract_contact_info_from_resume(resume_path: Path) -> dict:
         "phone": extract_phone(text)
     }
 
-if __name__ == "__main__":
-    resume_file = Path("/home/binit/HR_system/resume_extractor/resume_output_1.md")
-    if resume_file.exists():
-        info = extract_contact_info_from_resume(resume_file)
-        print("Extracted Contact Info:\n")
-        for key, value in info.items():
-            print(f"{key.title()}: {value}")
-    else:
-        print("Resume file not found.")
+# if __name__ == "__main__":
+#     resume_file = Path("/app/resume_extractor/Binit_Sapkota_resume.md")
+#     if resume_file.exists():
+#         info = extract_contact_info_from_resume(resume_file)
+#         print("Extracted Contact Info:\n")
+#         for key, value in info.items():
+#             print(f"{key.title()}: {value}")
+#     else:
+#         print("Resume file not found.")
