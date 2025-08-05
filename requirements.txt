@@ -10,3 +10,6 @@ markdown==3.7
 # gradio==5.31.0
 langchain-ollama==0.3.6
 ollama==0.5.1
+langchain-community==0.3.27
+pdfplumber==0.11.7
+python-multipart
