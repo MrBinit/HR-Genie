@@ -1,4 +1,8 @@
-from sqlalchemy import Column, Integer, String, Float, Text, TIMESTAMP, func
+from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, func, Boolean, ForeignKey
+from sqlalchemy.orm import relationship
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey
+from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 
 Base = declarative_base()
@@ -11,7 +15,31 @@ class Candidate(Base):
     email = Column(String, unique=True)
     phone = Column(String)
     file_path = Column(String)
-    score = Column(Float, nullable=True)
     summary = Column(Text, nullable=True)
+    candidate_pitch = Column(Text, nullable=True)
     uploaded_at = Column(TIMESTAMP, server_default=func.now())
     status = Column(String, default="Pending")
+
+    referrals = relationship("Referral", back_populates="candidate", cascade="all, delete-orphan")
+
+class Referral(Base):
+    __tablename__ = "referrals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    company = Column(String, nullable=True)
+    email = Column(String, nullable=False)
+    verified = Column(Boolean, default=False)
+
+    candidate_id = Column(Integer, ForeignKey("candidates.id"))
+    candidate = relationship("Candidate", back_populates="referrals")
+
+
+class JobDescription(Base):
+    __tablename__ = "job_descriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    position = Column(String, nullable=False)
+    description_text = Column(Text, nullable=True)
+    file_path = Column(String, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())

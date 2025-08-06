@@ -2,6 +2,7 @@ import re
 from pathlib import Path
 from typing import Dict
 
+
 SECTION_PATTERNS = {
     "experience": [
         r"professional experience", r"work experience", r"experience",
@@ -15,9 +16,11 @@ SECTION_PATTERNS = {
     ],
     "projects": [
         r"projects", r"key projects", r"notable work", r"case studies"
+    ],
+    "referral": [
+        r"referral", r"referred by", r"reference", r"references", r"recommendation", r"endorsed by"
     ]
 }
-
 
 def smart_resume_chunker(resume_text: str) -> Dict[str, str]:
     """
