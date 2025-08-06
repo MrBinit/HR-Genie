@@ -1,7 +1,7 @@
 
 from langchain_ollama import ChatOllama
 
-def get_llm(model_name: str = "mistral:7b-instruct", temperature: float = 0.0) -> ChatOllama:
+def get_llm(model_name: str = "gpt-oss:20b", temperature: float = 0.0) -> ChatOllama:
     """
     Returns a configured ChatOllama model.
 
@@ -15,6 +15,6 @@ def get_llm(model_name: str = "mistral:7b-instruct", temperature: float = 0.0) -
     return ChatOllama(
         model=model_name,
         temperature=temperature,
+        base_url="http://192.168.100.100:11434",
     )
-
 

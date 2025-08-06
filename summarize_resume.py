@@ -4,6 +4,8 @@ from dotenv import load_dotenv
 from chunker import smart_resume_chunker
 from ollama_model import get_llm
 import logging
+from typing import Dict
+
 
 
 load_dotenv(override=True)
@@ -22,31 +24,21 @@ logging.basicConfig(
 llm = get_llm()
 
 def summarize_section_with_llm(section_name: str, section_text: str) -> str:
-    prompt = f"""<s>[INST] <<SYS>>
+    prompt = f"""
 You are a helpful HR assistant. Summarize the following {section_name} section of a candidate's resume in short.
 Highlight key points in bullet points.
-<</SYS>>
 
 {section_text}
-[/INST]"""
+"""
     response = llm.invoke(prompt)
     return response.content.strip()
 
-def summarize_resume_sections(resume_path: Path):
-    if not resume_path.exists():
-        logging.error("Resume file not found at: %s", resume_path)
-        return
-
-    resume_text = resume_path.read_text(encoding='utf-8')
-    sections = smart_resume_chunker(resume_text)
-
+def summarize_resume_sections(sections: Dict[str, str]) -> str:
     summarized_output = "\n\n **Summarized Resume Sections**\n\n"
     for section, content in sections.items():
         summary = summarize_section_with_llm(section, content)
         summarized_output += f"### {section.title()}\n{summary}\n\n"
-
     return summarized_output
-
 
 if __name__ == "__main__":
     resume_file = Path(RESUME_PARSE_PATH)

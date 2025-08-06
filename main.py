@@ -10,6 +10,8 @@ from extract_contact_info import extract_contact_info_from_resume
 from db import SessionLocal
 from models import Candidate
 from sqlalchemy.exc import IntegrityError
+from chunker import smart_resume_chunker
+from summarize_resume import summarize_resume_sections
 
 
 # Load environment variables
@@ -68,6 +70,19 @@ async def upload_file(
             parsed_md_path = pathlib.Path("/app/resume_extractor") / (file_path.stem + ".md")
             if parsed_md_path.exists():
                 extracted_info = extract_contact_info_from_resume(parsed_md_path)
+                logging.info(f"Extracted contact info: {extracted_info}")
+
+                try:
+                    resume_text = parsed_md_path.read_text(encoding='utf-8')
+                    chunked_resume = smart_resume_chunker(resume_text)
+                    summarize_resume = summarize_resume_sections(chunked_resume)
+                    # summarize_resume = "hello this is for test"
+
+                except Exception as e:
+                    logging.error(f"Error during chunking/summarization: {e}")
+                    summarize_resume = None
+
+
                 db = SessionLocal()
                 try:
                     new_candidate = Candidate(
@@ -76,7 +91,7 @@ async def upload_file(
                         phone=extracted_info.get("phone"),
                         file_path=str(full_local_path),
                         score=None,
-                        summary=None,
+                        summary=summarize_resume,
                         status = "Received"
                     )
                     db.add(new_candidate)
