@@ -1,8 +1,7 @@
 import os
 from pathlib import Path
 from dotenv import load_dotenv
-from chunker import smart_resume_chunker
-from ollama_model import get_llm
+from model.ollama_model import get_llm
 import logging
 from typing import Dict
 

@@ -1,9 +1,9 @@
 import os
 from pathlib import Path
-from ollama_model import get_llm
+from model.ollama_model import get_llm
 from langchain_core.prompts import ChatPromptTemplate
 from dotenv import load_dotenv
-from prompt_builder import prompt_resume
+from model.prompt_builder import prompt_resume
 
 
 load_dotenv()

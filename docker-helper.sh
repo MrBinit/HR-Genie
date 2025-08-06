@@ -21,6 +21,6 @@ elif [[ "$ENV" == "prod" ]]; then
     echo "📦 Starting containers without rebuilding (Production)..."
     echo "📦 Starting up the containers (Production)..."
 else
-    echo "❌ Invalid environment selected. Please enter 'prod' or 'internal'."
+    echo " Invalid environment selected. Please enter 'prod' or 'internal'."
     exit 1
 fi

@@ -4,14 +4,14 @@ import os
 import pathlib
 import logging
 from dotenv import load_dotenv
-from parse import parse_document
+from services.parse import parse_document
 from fastapi.responses import JSONResponse
-from extract_contact_info import extract_contact_info_from_resume
-from db import SessionLocal
-from models import Candidate, Referral, JobDescription
+from services.extract_contact_info import extract_contact_info_from_resume
+from database.db import SessionLocal
+from database.models import Candidate, Referral, JobDescription
 from sqlalchemy.exc import IntegrityError
-from chunker import smart_resume_chunker
-from summarize_resume import summarize_resume_sections
+from services.chunker import smart_resume_chunker
+from services.summarize_resume import summarize_resume_sections
 from datetime import datetime
 
 
