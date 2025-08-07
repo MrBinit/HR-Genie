@@ -20,7 +20,11 @@ class Candidate(Base):
     uploaded_at = Column(TIMESTAMP, server_default=func.now())
     position = Column(String, nullable=True)
     status = Column(String, default="Pending")
+    manager_id = Column(String, ForeignKey("hiring_managers.id"), nullable=True)
+    department_id = Column(String, ForeignKey("departments.id"), nullable=True)
 
+    manager = relationship("HiringManager", back_populates="candidates")
+    department = relationship("Department")
     referrals = relationship("Referral", back_populates="candidate", cascade="all, delete-orphan")
 
 class Referral(Base):
@@ -71,3 +75,5 @@ class HiringManager(Base):
     department_id = Column(String, ForeignKey("departments.id"), nullable=False)
     department = relationship("Department", back_populates="managers")
     job_descriptions = relationship("JobDescription", back_populates="manager")
+    candidates = relationship("Candidate", back_populates="manager")
+

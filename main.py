@@ -34,7 +34,9 @@ logging.basicConfig(
 app = FastAPI()
 
 @app.post("/upload/resume")
-async def upload_resume(file: UploadFile = File(...), position: str = Form(...)):
+async def upload_resume(file: UploadFile = File(...),
+                        position: str = Form(...),
+                        department_name: str = Form(...)):
     try:
         # Save uploaded resume
         file_path = RESUME_INPUT_PATH / file.filename
@@ -61,6 +63,22 @@ async def upload_resume(file: UploadFile = File(...), position: str = Form(...))
 
         # Save to database
         db = SessionLocal()
+
+        department_name = department_name.strip().lower()
+
+        # get the department from the database
+        department = db.query(Department).filter(Department.name == department_name).first()
+        if not department:
+            db.close()
+            return JSONResponse(status_code=404, content={"error": "Department not found."})
+
+        # get the manager id
+        manager = db.query(HiringManager).filter(HiringManager.department_id == department.id).first()
+        if not manager:
+            db.close()
+            return JSONResponse(status_code=400, content={"error": f"No hiring manager assigned to department '{department_name}'."})
+
+
         try:
             new_candidate = Candidate(
                 name=extracted_info.get("name"),
@@ -70,7 +88,9 @@ async def upload_resume(file: UploadFile = File(...), position: str = Form(...))
                 file_path=str(file_path),
                 candidate_pitch=None,
                 summary=summarize_resume,
-                status="Received"
+                status="Received",
+                department_id=department.id,
+                manager_id=manager.id
             )
             db.add(new_candidate)
             db.commit()
