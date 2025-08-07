@@ -12,7 +12,9 @@ from database.models import Candidate, Referral, JobDescription, HiringManager
 from sqlalchemy.exc import IntegrityError
 from services.chunker import smart_resume_chunker
 from services.summarize_resume import summarize_resume_sections
+from services.analyze_resume import evaluate_candidate
 from database.models import Department
+import json
 
 
 
@@ -51,6 +53,7 @@ async def upload_resume(file: UploadFile = File(...),
 
         extracted_info = {}
         summarize_resume = None
+        evaluation_summary = None
         parsed_preview = ""
 
         if parsed_md_path.exists():
@@ -117,17 +120,43 @@ async def upload_resume(file: UploadFile = File(...),
                     )
                     db.add(referral)
             db.commit()
+
+            # evaluate the candidate using LLM
+            logging.info(f"Evaluating candidate with ID: {new_candidate.id}")
+
+            raw_summary = evaluate_candidate(candidate_id=new_candidate.id)
+            logging.info(f"Evaluation summary: {raw_summary}")
+
+            try:
+                result = json.loads(raw_summary)
+                score = result.get("score")
+                summary = result.get("summary")
+            except Exception as e:
+                logging.error(f"Failed to parse evaluation response: {e}")
+                score = None
+                summary = None
+
+            candidate_to_update = db.merge(new_candidate)
+            candidate_to_update.cv_score = score
+            candidate_to_update.candidate_pitch = summary
+
+            db.commit()
+
         except IntegrityError:
             db.rollback()
             logging.warning("Candidate with this email already exists.")
         finally:
             db.close()
 
+
         return {
             "message": "Resume uploaded and processed successfully",
             "filename": file.filename,
             "parsed_preview": parsed_preview,
-            "extracted_info": extracted_info
+            "extracted_info": extracted_info,
+            "score": score,
+            "summary": summary
+
         }
 
     except Exception as e:

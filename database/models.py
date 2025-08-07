@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, func, Boolean, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, func, Boolean, ForeignKey, Float
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column, Integer, String, Boolean, ForeignKey
@@ -15,15 +15,15 @@ class Candidate(Base):
     email = Column(String, unique=True)
     phone = Column(String)
     file_path = Column(String)
-    candidate_pitch = Column(Text, nullable=True)
     uploaded_at = Column(TIMESTAMP, server_default=func.now())
     position = Column(String, nullable=True)
     status = Column(String, default="Pending")
+    cv_score = Column(Float, nullable=True)
     manager_id = Column(String, ForeignKey("hiring_managers.id"), nullable=True)
     department_id = Column(String, ForeignKey("departments.id"), nullable=True)
     job_description_id = Column(Integer, ForeignKey("job_descriptions.id"))
     summary = Column(Text, nullable=True)
-
+    candidate_pitch = Column(Text, nullable=True)
 
     job_description = relationship("JobDescription", back_populates="candidates")
     manager = relationship("HiringManager", back_populates="candidates")
