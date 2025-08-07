@@ -42,25 +42,6 @@ async def upload_resume(file: UploadFile = File(...), position: str = Form(...))
 
         logging.info(f"Resume saved to: {file_path}")
 
-        # resume_text, parsed_md_path = parse_document(str(file_path), is_job_description=False)
-        # logging.info(f"Parsed Markdown Path: {parsed_md_path}")
-
-        # extracted_info = {}
-        # summarize_resume = None
-        # parsed_preview = ""
-
-        # if parsed_md_path.exists():
-        #     resume_text = parsed_md_path.read_text(encoding='utf-8')
-        #     parsed_preview = resume_text[:500] + "..."
-        #     extracted_info = extract_contact_info_from_resume(parsed_md_path)
-        #     chunked_resume = smart_resume_chunker(resume_text)
-        #     summarize_resume = summarize_resume_sections(chunked_resume)
-        #     # summarize_resume = f"Dummy summary of"
-
-        # else:
-        #     logging.warning(f"Markdown file not found at: {parsed_md_path}")
-
-
         resume_text, parsed_md_path = parse_document(str(file_path), is_job_description=False)
         parsed_md_path = pathlib.Path(parsed_md_path)
         logging.info(f"Parsed Markdown Path: {parsed_md_path}")
