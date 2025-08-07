@@ -15,16 +15,20 @@ class Candidate(Base):
     email = Column(String, unique=True)
     phone = Column(String)
     file_path = Column(String)
-    summary = Column(Text, nullable=True)
     candidate_pitch = Column(Text, nullable=True)
     uploaded_at = Column(TIMESTAMP, server_default=func.now())
     position = Column(String, nullable=True)
     status = Column(String, default="Pending")
     manager_id = Column(String, ForeignKey("hiring_managers.id"), nullable=True)
     department_id = Column(String, ForeignKey("departments.id"), nullable=True)
+    job_description_id = Column(Integer, ForeignKey("job_descriptions.id"))
+    summary = Column(Text, nullable=True)
 
+
+    job_description = relationship("JobDescription", back_populates="candidates")
     manager = relationship("HiringManager", back_populates="candidates")
     department = relationship("Department")
+
     referrals = relationship("Referral", back_populates="candidate", cascade="all, delete-orphan")
 
 class Referral(Base):
@@ -45,13 +49,13 @@ class JobDescription(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     position = Column(String, nullable=False)
-    description_text = Column(Text, nullable=True)
     file_path = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     manager_id = Column(String, ForeignKey("hiring_managers.id"), nullable=False)
+    description_text = Column(Text, nullable=True)
+
     manager = relationship("HiringManager", back_populates="job_descriptions")
-
-
+    candidates = relationship("Candidate", back_populates="job_description")
 
 
 class Department(Base):

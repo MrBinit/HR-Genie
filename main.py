@@ -78,6 +78,15 @@ async def upload_resume(file: UploadFile = File(...),
             db.close()
             return JSONResponse(status_code=400, content={"error": f"No hiring manager assigned to department '{department_name}'."})
 
+        job_description = db.query(JobDescription).filter(
+            JobDescription.position == position.strip().lower()
+        ).first()
+
+        if not job_description:
+            db.close()
+            return JSONResponse(status_code=404, content={
+                "error": f"No job description found for position '{position}' in department '{department_name}'."
+            })
 
         try:
             new_candidate = Candidate(
@@ -90,7 +99,9 @@ async def upload_resume(file: UploadFile = File(...),
                 summary=summarize_resume,
                 status="Received",
                 department_id=department.id,
-                manager_id=manager.id
+                manager_id=manager.id,
+                job_description_id=job_description.id
+
             )
             db.add(new_candidate)
             db.commit()
