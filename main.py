@@ -8,11 +8,12 @@ from services.parse import parse_document
 from fastapi.responses import JSONResponse
 from services.extract_contact_info import extract_contact_info_from_resume
 from database.db import SessionLocal
-from database.models import Candidate, Referral, JobDescription
+from database.models import Candidate, Referral, JobDescription, HiringManager
 from sqlalchemy.exc import IntegrityError
 from services.chunker import smart_resume_chunker
 from services.summarize_resume import summarize_resume_sections
-from datetime import datetime
+from database.models import Department
+
 
 
 
@@ -107,6 +108,7 @@ async def upload_resume(file: UploadFile = File(...), position: str = Form(...))
 async def upload_job_description(
     position: str = Form(...),
     description_text: str = Form(None),
+    manager_email: str = Form(...),
     file: UploadFile = File(None)
 ):
     try:
@@ -117,10 +119,13 @@ async def upload_job_description(
                 content={"error": "Provide either a job description file OR text — not both."}
             )
 
+        db = SessionLocal()
+        manager = db.query(HiringManager).filter(HiringManager.email == manager_email.strip().lower()).first()
+        if not manager:
+            return JSONResponse(status_code=404, content={"error": "Manager not found."})
+
         file_path_str = None
         parsed_text = None
-
-        # Normalize position to lowercase
         position_lower = position.strip().lower()
 
         # Handle file upload
@@ -150,7 +155,8 @@ async def upload_job_description(
             jd = JobDescription(
                 position=position_lower,
                 description_text=parsed_text,
-                file_path=file_path_str
+                file_path=file_path_str,
+                manager_id=manager.id
             )
             db.add(jd)
             db.commit()
@@ -169,6 +175,8 @@ async def upload_job_description(
         return {
             "message": "Job description uploaded and saved successfully",
             "position": position_lower,
+            "manager": manager.name,
+            "department": manager.department.name,
             "file_path": file_path_str,
             "parsed_preview": parsed_text[:500] + "..." if parsed_text else "Empty"
         }
@@ -176,3 +184,100 @@ async def upload_job_description(
     except Exception as e:
         logging.error(f"Error uploading job description: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.post("/create-department")
+def create_department(name: str = Form(...)):
+    db = SessionLocal()
+    try:
+        name = name.strip().lower()
+
+        existing = db.query(Department).filter(Department.name == name).first()
+        if existing:
+            return {"message": "Department already exists", "id": existing.id}
+
+        # Generate new department ID
+        last_dept = db.query(Department).order_by(Department.id.desc()).first()
+        if last_dept:
+            last_num = int(last_dept.id.replace("dept", ""))
+            new_num = last_num + 1
+        else:
+            new_num = 1
+        dept_id = f"dept{new_num:03d}"
+
+        new_department = Department(id=dept_id, name=name)
+        db.add(new_department)
+        db.commit()
+        db.refresh(new_department)
+
+        return {
+            "message": "Department created successfully",
+            "id": new_department.id,
+            "name": new_department.name
+        }
+
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Error creating department: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    finally:
+        db.close()
+
+
+@app.post("/register-manager")
+def register_hiring_manager(
+    name: str = Form(...),
+    email: str = Form(...),
+    phone: str = Form(None),
+    department_name: str = Form(...)
+):
+    db = SessionLocal()
+    try:
+        # Normalize input
+        department_name = department_name.strip().lower()
+        email = email.strip().lower()
+
+        # Find department
+        department = db.query(Department).filter(Department.name == department_name).first()
+        if not department:
+            return JSONResponse(status_code=404, content={"error": "Department not found. Please create it first."})
+
+        # Generate unique hiring manager ID
+        last_manager = db.query(HiringManager).order_by(HiringManager.id.desc()).first()
+        if last_manager:
+            last_num = int(last_manager.id.replace("bn", ""))
+            new_num = last_num + 1
+        else:
+            new_num = 1
+        new_id = f"bn{new_num:03d}"
+
+        # Create new manager
+        new_manager = HiringManager(
+            id=new_id,
+            name=name.strip(),
+            email=email,
+            phone=phone.strip() if phone else None,
+            department_id=department.id
+        )
+        db.add(new_manager)
+        db.commit()
+        db.refresh(new_manager)
+
+        return {
+            "message": "Hiring Manager registered successfully",
+            "manager_id": new_manager.id,
+            "name": new_manager.name,
+            "email": new_manager.email,
+            "phone": new_manager.phone,
+            "department": department.name
+        }
+
+    except IntegrityError:
+        db.rollback()
+        logging.error("Hiring Manager with this email already exists.")
+        return JSONResponse(status_code=400, content={"error": "Hiring Manager with this email already exists."})
+    except Exception as e:
+        db.rollback()
+        logging.error(f"Error registering hiring manager: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    finally:
+        db.close()

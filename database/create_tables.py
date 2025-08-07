@@ -5,7 +5,7 @@ from db import engine
 
 Base.metadata.create_all(bind=engine)
 
-# reset_db.py
+# # reset_db.py
 
 # from db import engine
 # from models import Base
@@ -16,4 +16,4 @@ Base.metadata.create_all(bind=engine)
 # # Recreate fresh tables
 # Base.metadata.create_all(bind=engine)
 
-# print("✅ Database tables dropped and recreated.")
+# print("Database tables dropped and recreated.")

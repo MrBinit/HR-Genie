@@ -44,3 +44,30 @@ class JobDescription(Base):
     description_text = Column(Text, nullable=True)
     file_path = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
+    manager_id = Column(String, ForeignKey("hiring_managers.id"), nullable=False)
+    manager = relationship("HiringManager", back_populates="job_descriptions")
+
+
+
+
+class Department(Base):
+    __tablename__ = "departments"
+
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String, unique=True, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    managers = relationship("HiringManager", back_populates="department")
+
+
+class HiringManager(Base):
+    __tablename__ = "hiring_managers"
+
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    email = Column(String, nullable=False, unique=True)
+    phone = Column(String, nullable=True)
+
+    department_id = Column(String, ForeignKey("departments.id"), nullable=False)
+    department = relationship("Department", back_populates="managers")
+    job_descriptions = relationship("JobDescription", back_populates="manager")
