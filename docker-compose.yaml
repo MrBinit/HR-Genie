@@ -28,8 +28,10 @@ services:
     ports:
       - "8020:8020"
     volumes:
-      - ./job_description:/app/job_description
-      - ./resume:/app/resume
+      - ./data/job_description:/app/data/job_description
+      - ./data/resume:/app/data/resume
+      - ./data/job_description_extractor:/app/data/job_description_extractor
+      - ./data/resume_extractor:/app/data/resume_extractor
       - .:/app
     depends_on:
       - postgres

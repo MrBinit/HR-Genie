@@ -16,11 +16,10 @@ SECTION_PATTERNS = {
     ],
     "projects": [
         r"projects", r"key projects", r"notable work", r"case studies"
-    ],
-    "referral": [
-        r"referral", r"referred by", r"reference", r"references", r"recommendation", r"endorsed by"
     ]
 }
+
+
 
 def smart_resume_chunker(resume_text: str) -> Dict[str, str]:
     """
@@ -52,21 +51,3 @@ def smart_resume_chunker(resume_text: str) -> Dict[str, str]:
 
     return extracted_sections
 
-
-def main():
-    # Load resume file
-    resume_path = Path("/home/binit/HR_system/resume_extractor/resume_output_1.md")
-    if not resume_path.exists():
-        print("Resume file not found.")
-        return
-
-    resume_text = resume_path.read_text(encoding='utf-8')
-    sections = smart_resume_chunker(resume_text)
-
-    print("Extracted Resume Sections:\n")
-    for section, content in sections.items():
-        print(f"--- {section.upper()} ---\n{content[:500]}...\n")
-
-
-if __name__ == "__main__":
-    main()

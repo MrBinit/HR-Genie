@@ -18,6 +18,7 @@ class Candidate(Base):
     summary = Column(Text, nullable=True)
     candidate_pitch = Column(Text, nullable=True)
     uploaded_at = Column(TIMESTAMP, server_default=func.now())
+    position = Column(String, nullable=True)
     status = Column(String, default="Pending")
 
     referrals = relationship("Referral", back_populates="candidate", cascade="all, delete-orphan")

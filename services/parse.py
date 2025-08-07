@@ -6,8 +6,10 @@ from langchain_community.document_loaders import PDFPlumberLoader
 
 load_dotenv(override=True)
 
-RESUME_INPUT_PATH = os.getenv("PDF_INPUT_PATH")
-RESUME_OUTPUT_PATH = os.getenv("PDF_OUTPUT_PATH")
+
+RESUME_OUTPUT_PATH = os.getenv("RESUME_OUTPUT_PATH", "/app/data/resume_extractor")
+JOB_DESCRIPTION_OUTPUT_DIR = os.getenv("JOB_DESCRIPTION_OUTPUT_DIR", "/app/data/job_description_extractor")
+
 JOB_DESCRIPTION_INPUT_PATH = os.getenv("JOB_DESCRIPTION_DIR")
 JOB_DESCRIPTION_OUTPUT_DIR = os.getenv("JOB_DESCRIPTION_OUTPUT_DIR")
 LOG_PATH = os.getenv("LOG_PATH", "app.log")
@@ -43,7 +45,7 @@ def pdf_parse(document_path: str, is_job_description=False) -> str:
         output_path.write_text(md_text, encoding='utf-8')
         logging.info(f"PDF parsed and saved to {output_path}")
 
-        return str(output_path)
+        return md_text, str(output_path)
     except Exception as e:
         logging.error(f"Error parsing PDF: {e}")
         raise
@@ -57,24 +59,3 @@ def parse_document(document_path: str, is_job_description=False) -> str:
 
     return pdf_parse(document_path, is_job_description=is_job_description)
 
-
-if __name__ == "__main__":
-    is_description = True
-
-    if is_description:
-        if not JOB_DESCRIPTION_INPUT_PATH:
-            logging.error("JOB_DESCRIPTION_INPUT_PATH is not set.")
-            raise RuntimeError("Missing JOB_DESCRIPTION_INPUT_PATH in .env")
-        input_path = JOB_DESCRIPTION_INPUT_PATH
-    else:
-        if not RESUME_INPUT_PATH:
-            logging.error("PDF_INPUT_PATH (resume) is not set.")
-            raise RuntimeError("Missing PDF_INPUT_PATH in .env")
-        input_path = RESUME_INPUT_PATH
-
-    try:
-        text = parse_document(input_path, is_job_description=is_description)
-        print(text)
-    except Exception as e:
-        logging.error("Failed to process document: %s", e)
-        raise

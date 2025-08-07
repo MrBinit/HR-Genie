@@ -19,12 +19,12 @@ from datetime import datetime
 # Load environment variables
 load_dotenv(override=True)
 
-JOB_DESCRIPTION_DIR = pathlib.Path(os.getenv("JOB_DESCRIPTION_DIR", "/app/job_description"))
-RESUME_INPUT_PATH = pathlib.Path(os.getenv("PDF_INPUT_PATH", "/app/resume"))
-JOB_DESCRIPTION_OUTPUT_DIR = pathlib.Path(os.getenv("JOB_DESCRIPTION_OUTPUT_DIR", "/app/job_description_extractor"))
+JOB_DESCRIPTION_DIR = pathlib.Path(os.getenv("JOB_DESCRIPTION_DIR", "/app/data/job_description"))
+RESUME_INPUT_PATH = pathlib.Path(os.getenv("RESUME_INPUT_PATH", "/app/data/resume"))
+JOB_DESCRIPTION_OUTPUT_DIR = pathlib.Path(os.getenv("JOB_DESCRIPTION_OUTPUT_DIR", "/app/data/job_description_extractor"))
 JOB_DESCRIPTION_DIR.mkdir(parents=True, exist_ok=True)
 RESUME_INPUT_PATH.mkdir(parents=True, exist_ok=True)
-
+RESUME_OUTPUT_PATH = pathlib.Path(os.getenv("RESUME_OUTPUT_PATH", "/app/data/resume_extractor"))
 # Logging setup
 logging.basicConfig(
     level=logging.INFO,
@@ -33,32 +33,58 @@ logging.basicConfig(
 app = FastAPI()
 
 @app.post("/upload/resume")
-async def upload_resume(file: UploadFile = File(...)):
+async def upload_resume(file: UploadFile = File(...), position: str = Form(...)):
     try:
-        upload_dir = RESUME_INPUT_PATH
-        file_path = upload_dir / file.filename
+        # Save uploaded resume
+        file_path = RESUME_INPUT_PATH / file.filename
         with open(file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
 
         logging.info(f"Resume saved to: {file_path}")
-        parsed_text = parse_document(str(file_path), is_job_description=False)
 
-        parsed_md_path = pathlib.Path("/app/resume_extractor") / (file_path.stem + ".md")
+        # resume_text, parsed_md_path = parse_document(str(file_path), is_job_description=False)
+        # logging.info(f"Parsed Markdown Path: {parsed_md_path}")
+
+        # extracted_info = {}
+        # summarize_resume = None
+        # parsed_preview = ""
+
+        # if parsed_md_path.exists():
+        #     resume_text = parsed_md_path.read_text(encoding='utf-8')
+        #     parsed_preview = resume_text[:500] + "..."
+        #     extracted_info = extract_contact_info_from_resume(parsed_md_path)
+        #     chunked_resume = smart_resume_chunker(resume_text)
+        #     summarize_resume = summarize_resume_sections(chunked_resume)
+        #     # summarize_resume = f"Dummy summary of"
+
+        # else:
+        #     logging.warning(f"Markdown file not found at: {parsed_md_path}")
+
+
+        resume_text, parsed_md_path = parse_document(str(file_path), is_job_description=False)
+        parsed_md_path = pathlib.Path(parsed_md_path)
+        logging.info(f"Parsed Markdown Path: {parsed_md_path}")
+
         extracted_info = {}
         summarize_resume = None
+        parsed_preview = ""
 
         if parsed_md_path.exists():
+            parsed_preview = resume_text[:500] + "..."
             extracted_info = extract_contact_info_from_resume(parsed_md_path)
-            resume_text = parsed_md_path.read_text(encoding='utf-8')
             chunked_resume = smart_resume_chunker(resume_text)
             summarize_resume = summarize_resume_sections(chunked_resume)
+        else:
+            logging.warning(f"Markdown file not found at: {parsed_md_path}")
 
+        # Save to database
         db = SessionLocal()
         try:
             new_candidate = Candidate(
                 name=extracted_info.get("name"),
                 email=extracted_info.get("email"),
                 phone=extracted_info.get("phone"),
+                position=position.strip().lower(),
                 file_path=str(file_path),
                 candidate_pitch=None,
                 summary=summarize_resume,
@@ -87,13 +113,14 @@ async def upload_resume(file: UploadFile = File(...)):
         return {
             "message": "Resume uploaded and processed successfully",
             "filename": file.filename,
-            "parsed_preview": parsed_text[:500] + "...",
+            "parsed_preview": parsed_preview,
             "extracted_info": extracted_info
         }
 
     except Exception as e:
         logging.error(f"Error uploading resume: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 @app.post("/upload/job-description")
 async def upload_job_description(
@@ -115,7 +142,7 @@ async def upload_job_description(
         # Normalize position to lowercase
         position_lower = position.strip().lower()
 
-        # Option 1: Handle file upload
+        # Handle file upload
         if file:
             file_path = JOB_DESCRIPTION_DIR / file.filename
             with open(file_path, "wb") as buffer:
@@ -124,7 +151,7 @@ async def upload_job_description(
             file_path_str = str(file_path)
             logging.info(f"Job description file saved to: {file_path_str}")
 
-            parsed_text = parse_document(str(file_path), is_job_description=True)
+            parsed_text = str(parse_document(str(file_path), is_job_description=True))
 
         # Handle plain text input and save as Markdown
         elif description_text:
