@@ -1,32 +1,3 @@
-# def prompt_resume(resume_text: str, job_description: str) -> str:
-#     """
-#     Builds an instruction-style prompt for evaluating a candidate's resume
-#     against a job description. The evaluation is based on academic background,
-#     project work, relevant work experience, and skills.
-#     """
-
-#     system = (
-#         "You are a senior HR analyst. Your task is to evaluate the following resume "
-#         "against the provided job description. Investigate the resume carefully and critically.\n\n"
-#         "Focus your analysis on the following criteria:\n"
-#         "1. Academic qualifications and performance\n"
-#         "2. Projects (quality, relevance, complexity)\n"
-#         "3. Work experience (roles, impact, relevance)\n"
-#         "4. Skills and how well they match the job requirements\n\n"
-#         "Provide a short and precise evaluation summary in 3–4 sentences.\n"
-#         "End your response with a final score out of 10, based strictly on the criteria above.\n"
-#         "Avoid unnecessary repetition or generic statements.\n"
-#     )
-
-#     user = (
-#         "Candidate Resume:\n\n"
-#         f"{resume_text}\n\n"
-#         "Job Description:\n\n"
-#         f"{job_description}\n\n"
-#     )
-
-#     return system + user
-
 
 def prompt_resume(resume_text: str, job_description: str) -> str:
     """
@@ -63,3 +34,105 @@ def prompt_resume(resume_text: str, job_description: str) -> str:
     )
 
     return system + "\n\n" + user
+
+def prompt_resume_section(section_name: str, section_text: str) -> str:
+    """
+    Builds a prompt for the LLM to summarize a specific section of a candidate's resume.
+    Output must be short, use bullet points, and focus on key, relevant details.
+    """
+    system = (
+        "You are a helpful HR assistant. Your task is to summarize a specific section "
+        "of a candidate's resume in a short, clear way.\n"
+        "Formatting rules:\n"
+        "- Use concise bullet points (•) for each key detail.\n"
+        "- Focus on concrete skills, achievements, and relevant facts.\n"
+        "- Avoid unnecessary adjectives or filler language.\n"
+        "- Return only the bullet points without extra commentary."
+    )
+
+    user = (
+        f"Section name: {section_name}\n\n"
+        f"Section text:\n{section_text}"
+    )
+
+    return system + "\n\n" + user
+
+
+def prompt_manager_email(
+    manager_name: str,
+    cand_name: str,
+    position: str,
+    score: float,
+    summary: str,
+    referrals_list: list[dict] | None = None
+) -> str:
+    """
+    Build a prompt for the LLM to generate a concise, professional HTML email to the manager.
+    LLM must return ONLY valid minimal HTML (no <html>/<head>).
+    """
+    # Format referrals as bullet points
+    refs_text = ""
+    if referrals_list:
+        lines = []
+        for r in referrals_list:
+            nm = (r.get("name") or "Unknown").strip()
+            em = (r.get("email") or "N/A").strip()
+            co = (r.get("company") or "N/A").strip()
+            lines.append(f"- {nm} ({em}) — {co}")
+        refs_text = "\n".join(lines)
+
+    system = (
+        "You are an HR assistant responsible for drafting concise, fact-based professional emails. "
+        "Use ONLY the information provided in the candidate summary and referrals. "
+        "Do NOT add or guess any missing details. "
+        "Return ONLY valid minimal HTML (no <html> or <head> tags). "
+        "Allowed tags: <div>, <p>, <ul>, <li>, <b>. "
+        "No markdown. No extra commentary. Keep the email within 500 words."
+    )
+
+    user = f"""
+Write an HTML email to the hiring manager about a candidate screening result.
+
+Manager: {manager_name}
+Candidate: {cand_name}
+Role: {position}
+Score: {score:.1f} / 10
+
+Candidate Screening Summary (from evaluator):
+---
+{summary}
+---
+
+Referrals:
+{refs_text or "None"}
+
+The email must:
+1. Start with a greeting to {manager_name}.
+2. Give a concise but complete resume summary covering:
+   - Key skills relevant to the role.
+   - Relevant work experience and impact.
+   - 1–3 most notable projects from the candidate that match the job description.
+3. If referrals exist, list them clearly in a bullet list.
+4. End with a call to action:
+   - Ask if we should move ahead with the resume or reject it.
+   - If moving ahead, request the manager's preferred time window for scheduling a meeting.
+
+Return ONLY the HTML snippet — no plain text before or after.
+"""
+    return system + "\n\n" + user
+
+
+def prompt_candidate_reply(text: str) -> str:
+    return f"""
+You are an assistant that analyzes a candidate's response about interview scheduling.
+
+Candidate said:
+\"\"\"{text}\"\"\"
+
+Respond ONLY in JSON with:
+- "intent": one of "accept", "reject", "propose_new_time"
+- "proposed_time": optional, if intent is "propose_new_time"
+
+Example:
+{{"intent": "propose_new_time", "proposed_time": "2025-08-09T15:00:00+05:45"}}
+"""
