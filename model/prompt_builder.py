@@ -162,6 +162,33 @@ Return ONLY the HTML snippet — no plain text before or after.
 """
     return system + "\n\n" + user
 
+
+def _llm_rejection_email(cand_name: str | None) -> str:
+    """Generate a polite rejection email body with the LLM; fallback to a template if it fails."""
+    llm = get_llm(model_name="gpt-oss:20b", temperature=0.1)
+    prompt = f"""
+Write a short, warm, professional rejection email in HTML to a job applicant named "{cand_name or 'Candidate'}".
+Constraints:
+- 4–6 short sentences, friendly and respectful.
+- Say: we can’t move forward with the resume now.
+- Encourage them to stay connected and wish them the best for the future.
+- No company name (generic).
+- End with: "With regards,<br/>HR-Team".
+Return only the email body (HTML).
+"""
+    try:
+        resp = llm.invoke(prompt)
+        html = (resp.content or "").strip()
+        return _wrap_html(html)
+    except Exception as e:
+        logging.warning(f"[auto_reject] LLM failed, using fallback: {e}")
+        return _wrap_html(f"""
+<p>Hi {cand_name or 'there'},</p>
+<p>Thank you for your interest and for taking the time to apply. After careful review, we won’t be moving forward with your resume at this time.</p>
+<p>Please stay connected for future opportunities, and we wish you the very best in your career ahead.</p>
+<p>With regards,<br/>HR-Team</p>
+""")
+
 def prompt_candidate_reply(text: str) -> str:
     return f"""
 You are an assistant that analyzes a candidate's response about interview scheduling.

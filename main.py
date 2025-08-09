@@ -21,6 +21,8 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import Session
 from mail.notify_manager import notify_manager_if_pass
 from mail.mail_sender import send_email_html
+from apscheduler.schedulers.background import BackgroundScheduler
+from mail.auto_reject import auto_reject_candidates
 
 
 # from mail.notify_manager import notify_manager_if_pass
@@ -529,7 +531,7 @@ def create_internal_referral_by_employee_email(
             if notify_result.get("ok") and notify_result.get("notified") and notify_result.get("email_body"):
                 cand.manager_email_body = notify_result["email_body"]
                 db.commit()
-                db.refresh(cand)  
+                db.refresh(cand)
 
         # If already forwarded earlier → send a follow-up about the internal referrer
         if cand.status == "Forwarded to Manager":
@@ -576,3 +578,39 @@ def create_internal_referral_by_employee_email(
         return JSONResponse(status_code=500, content={"error": str(e)})
     finally:
         db.close()
+
+
+scheduler = BackgroundScheduler()
+GRACE_DAYS = int(os.getenv("GRACE_DAYS", "1"))
+
+
+# run daily at 00:15
+scheduler.add_job(
+    auto_reject_candidates,
+    "cron",
+    hour=0, minute=15,
+    kwargs={"grace_days": GRACE_DAYS, "threshold": THRESHOLD}
+)
+
+# this is for testing purposes which will send mail in 1 minute
+# scheduler.add_job(
+#     auto_reject_candidates,
+#     "interval",
+#     minutes=1,
+#     kwargs={"grace_days": 0, "threshold": THRESHOLD}
+# )
+
+@app.on_event("startup")
+def _start_scheduler():
+    try:
+        scheduler.start()
+        logging.info("Scheduler started for auto_reject_candidates")
+    except Exception as e:
+        logging.exception(f"Failed to start scheduler: {e}")
+
+@app.on_event("shutdown")
+def _shutdown_scheduler():
+    try:
+        scheduler.shutdown(wait=False)
+    except Exception:
+        pass
