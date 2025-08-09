@@ -11,13 +11,13 @@ def prompt_resume(
     """
     referral_note = (
         "\nReferral bonus rule: This candidate has a VERIFIED INTERNAL REFERRAL. "
-        "Increase the final score by approximately +2 compared to what you would normally give, "
         "but only if their skills/experience are relevant to the job.\n"
         if has_internal_referral else ""
     )
 
     system = (
         "You are a senior HR analyst. Critically evaluate the candidate's resume against the job description.\n"
+        "Today's date is 2025-08-09.\n"
         "Use ONLY the content provided below. Do NOT guess or add facts not present in the text.\n"
         "Scoring: 0.0–10.0 (one decimal). Clamp to this range. "
         "Be consistent and justify via the comparison fields.\n"
@@ -61,6 +61,7 @@ def prompt_resume_summary(section_name: str, section_text: str) -> str:
     system = (
         "You are a helpful HR assistant. Your task is to summarize a specific section "
         "of a candidate's resume in a short, clear way.\n"
+        "Today's date is 2025-08-09.\n"
         "Formatting rules:\n"
         "- Use concise bullet points (•) for each key detail.\n"
         "- Focus on concrete skills, achievements, and relevant facts.\n"
@@ -97,7 +98,7 @@ def prompt_manager_email(
         for r in referrals_list:
             nm = (r.get("name") or "Unknown").strip()
             em = (r.get("email") or "N/A").strip()
-            co = (r.get("company") or "N/A").strip()
+            co = (r.get("internal_department") or "N/A").strip()
             lines.append(f"- {nm} ({em}) — {co}")
         refs_text = "\n".join(lines)
 

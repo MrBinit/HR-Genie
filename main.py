@@ -19,6 +19,8 @@ from datetime import datetime
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import Session
+from mail.notify_manager import notify_manager_if_pass
+from mail.mail_sender import send_email_html
 
 
 # from mail.notify_manager import notify_manager_if_pass
@@ -32,6 +34,7 @@ JOB_DESCRIPTION_OUTPUT_DIR = pathlib.Path(os.getenv("JOB_DESCRIPTION_OUTPUT_DIR"
 JOB_DESCRIPTION_DIR.mkdir(parents=True, exist_ok=True)
 RESUME_INPUT_PATH.mkdir(parents=True, exist_ok=True)
 RESUME_OUTPUT_PATH = pathlib.Path(os.getenv("RESUME_OUTPUT_PATH", "/app/data/resume_extractor"))
+THRESHOLD = float(os.getenv("THRESHOLD", "6.0"))
 # Logging setup
 logging.basicConfig(
     level=logging.INFO,
@@ -143,8 +146,14 @@ async def upload_resume(file: UploadFile = File(...),
             candidate_to_update = db.merge(new_candidate)
             candidate_to_update.cv_score = score
             candidate_to_update.candidate_pitch = summary
-
             db.commit()
+
+            notify_result = {"ok": True, "notified": False}
+            if candidate_to_update.status == "Received" and (score is not None) and (score >= THRESHOLD):
+                notify_result = notify_manager_if_pass(candidate_id=candidate_to_update.id)
+                if notify_result.get("ok") and notify_result.get("notified") and notify_result.get("email_body"):
+                    candidate_to_update.manager_email_body = notify_result["email_body"]  # <-- FIXED
+                    db.commit()
 
         except IntegrityError:
             db.rollback()
@@ -159,7 +168,8 @@ async def upload_resume(file: UploadFile = File(...),
             "parsed_preview": parsed_preview,
             "extracted_info": extracted_info,
             "score": score,
-            "summary": summary
+            "summary": summary,
+            "notify": notify_result
         }
 
     except Exception as e:
@@ -440,7 +450,6 @@ def create_internal_referral_by_employee_email(
         cand_email = candidate_email.strip().lower()
         pos = position.strip().lower()
 
-        # 1) Find employee (case-insensitive), eager-load department
         emp = (
             db.query(Employee)
               .options(joinedload(Employee.department))
@@ -450,9 +459,9 @@ def create_internal_referral_by_employee_email(
         if not emp:
             return JSONResponse(status_code=404, content={"error": f"Employee '{emp_email}' not found."})
 
-        # 2) Find candidate by email + position (case-insensitive)
         cand = (
             db.query(Candidate)
+              .options(joinedload(Candidate.manager))
               .filter(
                   func.lower(Candidate.email) == cand_email,
                   func.lower(Candidate.position) == pos
@@ -465,7 +474,6 @@ def create_internal_referral_by_employee_email(
                 content={"error": f"Candidate not found for email '{cand_email}' and position '{pos}'."}
             )
 
-        # 3) Prevent duplicate internal referral (same candidate + same referrer email)
         exists = (
             db.query(Referral)
               .filter(
@@ -483,7 +491,12 @@ def create_internal_referral_by_employee_email(
 
         dept_name = emp.department.name if getattr(emp, "department", None) else "Internal"
 
-        # 4) Create referral + flip candidate flag
+        already_internal = (
+            db.query(Referral)
+              .filter(Referral.candidate_id == cand.id, Referral.is_internal.is_(True))
+              .count() > 0
+        )
+
         ref = Referral(
             name=emp.name,
             email=emp.email,
@@ -493,33 +506,66 @@ def create_internal_referral_by_employee_email(
             referrer_employee_id=emp.id
         )
         db.add(ref)
+
+        # +1 only on the first internal referral and only if there is a score
+        if not already_internal and cand.cv_score is not None:
+            cand.cv_score = min(float(cand.cv_score) + 1.0, 10.0)  # optional cap
+
         cand.is_internal = True
 
+        # Commit before notifying (notify uses a new Session)
         db.commit()
         db.refresh(ref)
         db.refresh(cand)
 
+        notify_result = None
+
+        # If newly eligible and still "Received", send the initial email
+        if (not already_internal
+            and cand.cv_score is not None
+            and cand.status == "Received"
+            and cand.cv_score >= THRESHOLD):
+            notify_result = notify_manager_if_pass(candidate_id=cand.id)
+            if notify_result.get("ok") and notify_result.get("notified") and notify_result.get("email_body"):
+                cand.manager_email_body = notify_result["email_body"]
+                db.commit()
+                db.refresh(cand)  
+
+        # If already forwarded earlier → send a follow-up about the internal referrer
+        if cand.status == "Forwarded to Manager":
+            if cand.manager and cand.manager.email:
+                followup_subject = f"[Follow-up] Internal referral for {cand.name or 'Candidate'}"
+                followup_html = f"""
+                <p>Hi {cand.manager.name if cand.manager else 'Manager'},</p>
+                <p>The candidate <b>{cand.name}</b> ({cand.position}) you received earlier now has an internal referral:</p>
+                <ul>
+                    <li><b>Name:</b> {emp.name}</li>
+                    <li><b>Email:</b> {emp.email}</li>
+                    <li><b>Department:</b> {dept_name}</li>
+                </ul>
+                <p>Regards,<br/>HR Automation</p>
+                """
+                send_email_html(
+                    to_email=cand.manager.email,
+                    subject=followup_subject,
+                    html_body=followup_html
+                )
+
         return {
             "message": "Internal referral recorded.",
-            "employee": {
-                "id": emp.id,
-                "name": emp.name,
-                "email": emp.email,
-                "department": dept_name
-            },
             "candidate": {
                 "id": cand.id,
                 "name": cand.name,
-                "email": cand.email,
-                "position": cand.position,
-                "internal_referral": "internal" if cand.is_internal else "external"
+                "cv_score": cand.cv_score,
+                "status": cand.status
             },
             "referral": {
                 "id": ref.id,
                 "candidate_id": ref.candidate_id,
-                "is_internal": "internal" if ref.is_internal else "external",
+                "referral_type": "internal",
                 "internal_department": ref.internal_department
-            }
+            },
+            "notify_result": notify_result
         }
 
     except IntegrityError:

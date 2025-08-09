@@ -32,6 +32,7 @@ class Candidate(Base):
     is_internal = Column(BOOLEAN, nullable=False, server_default=text('false'))
     summary = Column(Text, nullable=True)
     candidate_pitch = Column(Text, nullable=True)
+    manager_email_body = Column(Text, nullable=True) 
 
 
     job_description = relationship("JobDescription", back_populates="candidates")

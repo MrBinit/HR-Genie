@@ -50,7 +50,7 @@ def looks_like_title_or_company(line: str) -> bool:
 
 def extract_referrals(text: str) -> list:
     lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
-    recent_lines = lines[-15:] 
+    recent_lines = lines[-15:]
     start_index = None
 
     # Detect heading
@@ -79,8 +79,8 @@ def extract_referrals(text: str) -> list:
 
         if "name" not in current and looks_like_name(line):
             current["name"] = line
-        elif "company" not in current and looks_like_title_or_company(line):
-            current["company"] = line
+        elif "internal_department" not in current and looks_like_title_or_company(line):
+            current["internal_department"] = line
 
         # If we have name and email, store referral and reset
         if "name" in current and "email" in current:

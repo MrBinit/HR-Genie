@@ -25,14 +25,20 @@ services:
     build: .
     container_name: fastapi_app
     restart: always
+    working_dir: /app                 # <-- ensure we start in /app
+    environment:
+      - PYTHONPATH=/app               # <-- put /app on sys.path
+    command: >                        # <-- run uvicorn from /app
+      uvicorn main:app --host 0.0.0.0 --port 8020 --reload --app-dir /app
     ports:
       - "8020:8020"
     volumes:
-      - ./data/job_description:/app/data/job_description
-      - ./data/resume:/app/data/resume
-      - ./data/job_description_extractor:/app/data/job_description_extractor
-      - ./data/resume_extractor:/app/data/resume_extractor
       - .:/app
+      # - ./data/job_description:/app/data/job_description
+      # - ./data/resume:/app/data/resume
+      # - ./data/job_description_extractor:/app/data/job_description_extractor
+      # - ./data/resume_extractor:/app/data/resume_extractor
+      # - .:/app
     depends_on:
       - postgres
 
