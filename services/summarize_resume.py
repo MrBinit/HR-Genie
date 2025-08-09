@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from model.ollama_model import get_llm
 import logging
 from typing import Dict
-from model.prompt_builder import prompt_resume_section
+from model.prompt_builder import prompt_resume_summary
 
 
 load_dotenv(override=True)
@@ -22,7 +22,7 @@ logging.basicConfig(
 llm = get_llm()
 
 def summarize_section_with_llm(section_name: str, section_text: str) -> str:
-    prompt = prompt_resume_section(section_name, section_text)
+    prompt = prompt_resume_summary(section_name, section_text)
     response = llm.invoke(prompt)
     return response.content.strip()
 

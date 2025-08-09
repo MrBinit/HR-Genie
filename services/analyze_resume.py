@@ -14,7 +14,7 @@ from model.prompt_builder import prompt_resume
 # SQLAlchemy
 from sqlalchemy.orm import Session
 from database.db import SessionLocal
-from database.models import Candidate
+from database.models import Candidate, Referral
 
 def retrieve_candidate_and_jd(candidate_id: int):
     db: Session = SessionLocal()
@@ -33,19 +33,43 @@ def retrieve_candidate_and_jd(candidate_id: int):
     finally:
         db.close()
 
+def has_internal_referral(candidate_id: int) -> bool:
+    """True if candidate has at least one verified internal referral."""
+    db: Session = SessionLocal()
+    try:
+        exists = (
+            db.query(Referral)
+              .filter(
+                  Referral.candidate_id == candidate_id,
+                  getattr(Referral, "is_internal", False) == True,
+                  Referral.verified == True
+              ).first()
+            is not None
+        )
+        return exists
+    finally:
+        db.close()
+
 def evaluate_candidate(candidate_id: int):
     resume_text, job_description_text = retrieve_candidate_and_jd(candidate_id)
 
     if not resume_text or not job_description_text:
         print("Missing resume or job description text.")
         return
+    internal_ref = has_internal_referral(candidate_id)
+    print(f"Candidate {candidate_id} internal referral: {internal_ref}")
+
 
     # Load the LLM
     llm = get_llm(model_name="gpt-oss:20b", temperature=0.0)
 
     # Build the prompt
-    prompt = prompt_resume(resume_text, job_description_text)
+    prompt = prompt_resume(
+        resume_text=resume_text,
+        job_description=job_description_text,
+        has_internal_referral=internal_ref
+    )
     response = llm.invoke(prompt)
     return response.content.strip()
 
-print(evaluate_candidate(1))
+# print(evaluate_candidate(2))

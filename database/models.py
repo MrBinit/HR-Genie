@@ -1,9 +1,15 @@
-from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, func, Boolean, ForeignKey, Float
+from sqlalchemy import (
+    Column, Integer, String, Text, TIMESTAMP, Date, Numeric,
+    Boolean, ForeignKey, Float, UniqueConstraint, func
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import Column, Integer, String, Boolean, ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.dialects.postgresql import BOOLEAN
+from sqlalchemy import text
+
 
 Base = declarative_base()
 
@@ -22,8 +28,11 @@ class Candidate(Base):
     manager_id = Column(String, ForeignKey("hiring_managers.id"), nullable=True)
     department_id = Column(String, ForeignKey("departments.id"), nullable=True)
     job_description_id = Column(Integer, ForeignKey("job_descriptions.id"))
+
+    is_internal = Column(BOOLEAN, nullable=False, server_default=text('false'))
     summary = Column(Text, nullable=True)
     candidate_pitch = Column(Text, nullable=True)
+
 
     job_description = relationship("JobDescription", back_populates="candidates")
     manager = relationship("HiringManager", back_populates="candidates")
@@ -36,13 +45,21 @@ class Referral(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String, nullable=False)
-    company = Column(String, nullable=True)
+    internal_department = Column(String, nullable=True)
     email = Column(String, nullable=False)
-    verified = Column(Boolean, default=False)
+    verified = Column(Boolean, nullable=True)
+    is_internal = Column(BOOLEAN, nullable=False, server_default=text('false'))
 
+
+    referrer_employee_id = Column(String, ForeignKey("employees.id"), nullable=True)
+    referrer = relationship("Employee")
     candidate_id = Column(Integer, ForeignKey("candidates.id"))
     candidate = relationship("Candidate", back_populates="referrals")
 
+    # same employee can refer multiple candidates
+    __table_args__ = (
+    UniqueConstraint("candidate_id", "email", name="uq_referral_candidate_email"),
+    )
 
 class JobDescription(Base):
     __tablename__ = "job_descriptions"
@@ -66,6 +83,8 @@ class Department(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     managers = relationship("HiringManager", back_populates="department")
+    employees = relationship("Employee", back_populates="department")
+
 
 
 class HiringManager(Base):
@@ -81,3 +100,16 @@ class HiringManager(Base):
     job_descriptions = relationship("JobDescription", back_populates="manager")
     candidates = relationship("Candidate", back_populates="manager")
 
+
+class Employee(Base):
+    __tablename__ = "employees"
+
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    email = Column(String, unique=True, nullable=False)
+    phone = Column(String, nullable=True)
+    position = Column(String, nullable=True)
+    joining_date = Column(Date, nullable=True)
+    salary = Column(Numeric(12, 2), nullable=True)
+    department_id = Column(String, ForeignKey("departments.id"), nullable=True)
+    department = relationship("Department", back_populates="employees")

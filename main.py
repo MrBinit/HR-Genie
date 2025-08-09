@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
 import shutil
 import os
 import pathlib
@@ -8,16 +8,20 @@ from services.parse import parse_document
 from fastapi.responses import JSONResponse
 from services.extract_contact_info import extract_contact_info_from_resume
 from database.db import SessionLocal
-from database.models import Candidate, Referral, JobDescription, HiringManager
+from database.models import Candidate, Referral, JobDescription, HiringManager, Employee, Department
 from sqlalchemy.exc import IntegrityError
 from services.chunker import smart_resume_chunker
 from services.summarize_resume import summarize_resume_sections
 from services.analyze_resume import evaluate_candidate
-from database.models import Department
+from decimal import Decimal, InvalidOperation
 import json
+from datetime import datetime
+from sqlalchemy import func
+from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import Session
 
 
-
+# from mail.notify_manager import notify_manager_if_pass
 
 # Load environment variables
 load_dotenv(override=True)
@@ -53,7 +57,7 @@ async def upload_resume(file: UploadFile = File(...),
 
         extracted_info = {}
         summarize_resume = None
-        evaluation_summary = None
+        # evaluation_summary = None
         parsed_preview = ""
 
         if parsed_md_path.exists():
@@ -114,7 +118,7 @@ async def upload_resume(file: UploadFile = File(...),
                 if ref["name"] and ref["email"]:
                     referral = Referral(
                         name=ref["name"],
-                        company=ref.get("company", ""),
+                        internal_department=ref.get("internal_department", ""),
                         email=ref["email"],
                         candidate_id=new_candidate.id
                     )
@@ -156,7 +160,6 @@ async def upload_resume(file: UploadFile = File(...),
             "extracted_info": extracted_info,
             "score": score,
             "summary": summary
-
         }
 
     except Exception as e:
@@ -292,11 +295,8 @@ def register_hiring_manager(
 ):
     db = SessionLocal()
     try:
-        # Normalize input
         department_name = department_name.strip().lower()
         email = email.strip().lower()
-
-        # Find department
         department = db.query(Department).filter(Department.name == department_name).first()
         if not department:
             return JSONResponse(status_code=404, content={"error": "Department not found. Please create it first."})
@@ -338,6 +338,195 @@ def register_hiring_manager(
     except Exception as e:
         db.rollback()
         logging.error(f"Error registering hiring manager: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    finally:
+        db.close()
+
+
+
+@app.post("/register-employee")
+def register_employee(
+    name: str = Form(...),
+    email: str = Form(...),
+    phone: str = Form(None),
+    position: str = Form(None),
+    joining_date: str = Form(None),
+    salary: str = Form(None),
+    department_name: str = Form(None)
+):
+    db = SessionLocal()
+    try:
+        email = email.strip().lower()
+        dept = None
+
+        if department_name:
+            department_name = department_name.strip().lower()
+            dept = db.query(Department).filter(Department.name == department_name).first()
+            if not dept:
+                return JSONResponse(status_code=404, content={"error": "Department not found. Create it first."})
+
+        # Generate employee id like "emp001"
+        last_emp = db.query(Employee).order_by(Employee.id.desc()).first()
+        if last_emp:
+            try:
+                last_num = int(last_emp.id.replace("emp", ""))
+            except ValueError:
+                last_num = 0
+            new_num = last_num + 1
+        else:
+            new_num = 1
+        emp_id = f"emp{new_num:03d}"
+
+        # Parse date and salary
+        dt = None
+        if joining_date:
+            try:
+                dt = datetime.strptime(joining_date, "%Y-%m-%d").date()
+            except ValueError:
+                return JSONResponse(status_code=400, content={"error": "joining_date must be YYYY-MM-DD"})
+
+        sal = None
+        if salary:
+            try:
+                sal = Decimal(salary)
+            except InvalidOperation:
+                return JSONResponse(status_code=400, content={"error": "salary must be a numeric string"})
+
+        emp = Employee(
+            id=emp_id,
+            name=name.strip(),
+            email=email,
+            phone=phone.strip() if phone else None,
+            position=position.strip() if position else None,
+            joining_date=dt,
+            salary=sal,
+            department_id=dept.id if dept else None
+        )
+        db.add(emp)
+        db.commit()
+        db.refresh(emp)
+
+        return {
+            "message": "Employee registered successfully",
+            "employee": {
+                "id": emp.id, "name": emp.name, "email": emp.email, "phone": emp.phone,
+                "position": emp.position,
+                "joining_date": emp.joining_date.isoformat() if emp.joining_date else None,
+                "salary": str(emp.salary) if emp.salary is not None else None,
+                "department": dept.name if dept else None
+            }
+        }
+
+    except IntegrityError:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"error": "Employee with this email already exists."})
+    except Exception as e:
+        db.rollback()
+        logging.exception("Error registering employee")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+    finally:
+        db.close()
+
+
+@app.post("/referrals/internal")
+def create_internal_referral_by_employee_email(
+    employee_email: str = Form(...),
+    candidate_email: str = Form(...),
+    position: str = Form(...)
+):
+    db = SessionLocal()
+    try:
+        emp_email = employee_email.strip().lower()
+        cand_email = candidate_email.strip().lower()
+        pos = position.strip().lower()
+
+        # 1) Find employee (case-insensitive), eager-load department
+        emp = (
+            db.query(Employee)
+              .options(joinedload(Employee.department))
+              .filter(func.lower(Employee.email) == emp_email)
+              .first()
+        )
+        if not emp:
+            return JSONResponse(status_code=404, content={"error": f"Employee '{emp_email}' not found."})
+
+        # 2) Find candidate by email + position (case-insensitive)
+        cand = (
+            db.query(Candidate)
+              .filter(
+                  func.lower(Candidate.email) == cand_email,
+                  func.lower(Candidate.position) == pos
+              )
+              .first()
+        )
+        if not cand:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"Candidate not found for email '{cand_email}' and position '{pos}'."}
+            )
+
+        # 3) Prevent duplicate internal referral (same candidate + same referrer email)
+        exists = (
+            db.query(Referral)
+              .filter(
+                  Referral.candidate_id == cand.id,
+                  func.lower(Referral.email) == func.lower(emp.email),
+                  Referral.is_internal.is_(True)
+              )
+              .first()
+        )
+        if exists:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "This employee has already referred this candidate internally."}
+            )
+
+        dept_name = emp.department.name if getattr(emp, "department", None) else "Internal"
+
+        # 4) Create referral + flip candidate flag
+        ref = Referral(
+            name=emp.name,
+            email=emp.email,
+            internal_department=dept_name,
+            is_internal=True,
+            candidate_id=cand.id,
+            referrer_employee_id=emp.id
+        )
+        db.add(ref)
+        cand.is_internal = True
+
+        db.commit()
+        db.refresh(ref)
+        db.refresh(cand)
+
+        return {
+            "message": "Internal referral recorded.",
+            "employee": {
+                "id": emp.id,
+                "name": emp.name,
+                "email": emp.email,
+                "department": dept_name
+            },
+            "candidate": {
+                "id": cand.id,
+                "name": cand.name,
+                "email": cand.email,
+                "position": cand.position,
+                "internal_referral": "internal" if cand.is_internal else "external"
+            },
+            "referral": {
+                "id": ref.id,
+                "candidate_id": ref.candidate_id,
+                "is_internal": "internal" if ref.is_internal else "external",
+                "internal_department": ref.internal_department
+            }
+        }
+
+    except IntegrityError:
+        db.rollback()
+        return JSONResponse(status_code=400, content={"error": "Duplicate or invalid data."})
+    except Exception as e:
+        db.rollback()
         return JSONResponse(status_code=500, content={"error": str(e)})
     finally:
         db.close()
