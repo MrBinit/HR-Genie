@@ -24,8 +24,8 @@ from mail.mail_sender import send_email_html
 from apscheduler.schedulers.background import BackgroundScheduler
 from mail.auto_reject import auto_reject_candidates
 from mail.manager_reply_ingest import ingest_manager_replies
+from mail.candidate_reply_ingest import ingest_candidate_replies
 
-# from mail.notify_manager import notify_manager_if_pass
 
 # Load environment variables
 load_dotenv(override=True)
@@ -441,7 +441,6 @@ def register_employee(
     finally:
         db.close()
 
-
 @app.post("/referrals/internal")
 def create_internal_referral_by_employee_email(
     employee_email: str = Form(...),
@@ -478,6 +477,7 @@ def create_internal_referral_by_employee_email(
                 content={"error": f"Candidate not found for email '{cand_email}' and position '{pos}'."}
             )
 
+        # Has THIS employee already referred this candidate internally?
         exists = (
             db.query(Referral)
               .filter(
@@ -495,12 +495,18 @@ def create_internal_referral_by_employee_email(
 
         dept_name = emp.department.name if getattr(emp, "department", None) else "Internal"
 
+        # Was there ANY internal referral already?
         already_internal = (
             db.query(Referral)
               .filter(Referral.candidate_id == cand.id, Referral.is_internal.is_(True))
               .count() > 0
         )
 
+        # Capture status BEFORE making changes (important to avoid double emails)
+        previous_status = cand.status or "Received"
+        was_already_forwarded = (previous_status == "Forwarded to Manager")
+
+        # Create the new internal referral row
         ref = Referral(
             name=emp.name,
             email=emp.email,
@@ -513,30 +519,29 @@ def create_internal_referral_by_employee_email(
 
         # +1 only on the first internal referral and only if there is a score
         if not already_internal and cand.cv_score is not None:
-            cand.cv_score = min(float(cand.cv_score) + REFERRAL_POINT, 10.0)  # optional cap
+            cand.cv_score = min(float(cand.cv_score) + REFERRAL_POINT, 10.0)
 
         cand.is_internal = True
 
-        # Commit before notifying (notify uses a new Session)
+        # Persist referral & score bump
         db.commit()
         db.refresh(ref)
         db.refresh(cand)
 
         notify_result = None
-
-        # If newly eligible and still "Received", send the initial email
-        if (not already_internal
+        # If candidate was already forwarded, send a follow-up email
+        if (not was_already_forwarded
             and cand.cv_score is not None
-            and cand.status == "Received"
+            and previous_status == "Received"
             and cand.cv_score >= THRESHOLD):
             notify_result = notify_manager_if_pass(candidate_id=cand.id)
+            # Optionally store the email body for audit
             if notify_result.get("ok") and notify_result.get("notified") and notify_result.get("email_body"):
                 cand.manager_email_body = notify_result["email_body"]
                 db.commit()
                 db.refresh(cand)
 
-        # If already forwarded earlier → send a follow-up about the internal referrer
-        if cand.status == "Forwarded to Manager":
+        elif was_already_forwarded:
             if cand.manager and cand.manager.email:
                 followup_subject = f"[Follow-up] Internal referral for {cand.name or 'Candidate'}"
                 followup_html = f"""
@@ -577,10 +582,10 @@ def create_internal_referral_by_employee_email(
         return JSONResponse(status_code=400, content={"error": "Duplicate or invalid data."})
     except Exception as e:
         db.rollback()
+        logging.exception("Error creating internal referral")
         return JSONResponse(status_code=500, content={"error": str(e)})
     finally:
         db.close()
-
 
 scheduler = BackgroundScheduler()
 GRACE_DAYS = int(os.getenv("GRACE_DAYS", "1"))
@@ -623,5 +628,11 @@ def _ingest_job():
     res = ingest_manager_replies()
     logging.info(f"[ingest_job] {res}")
 
+def _ingest_candidate_job():
+    res = ingest_candidate_replies()
+    logging.info(f"[ingest_candidate_job] {res}")
+
 # every minute (or whatever you want)
 scheduler.add_job(_ingest_job, "interval", minutes=1)
+
+scheduler.add_job(_ingest_candidate_job, "interval", minutes=1)

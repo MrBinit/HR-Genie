@@ -3,8 +3,11 @@ import base64
 import html
 import logging
 import re
+import os
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
+from zoneinfo import ZoneInfo
+from dotenv import load_dotenv
 
 from database.db import SessionLocal
 from database.models import (
@@ -18,14 +21,26 @@ from database.models import (
 from mail.mail_sender import send_email_html
 from mail.mail_receiver import get_emails_from_sender, mark_read
 from services.intent_parser_llm import parse_intent_llm
-import os
-from dotenv import load_dotenv
 
 load_dotenv(override=True)
 HR_EMAIL = os.getenv("SENDER_EMAIL")
+if not HR_EMAIL:
+    logging.warning("SENDER_EMAIL not set; outbound Message.sender_email will use None.")
+
+# Nepal Time
+NPT = ZoneInfo("Asia/Kathmandu")
+
+def _fmt_local(dt: datetime) -> str:
+    """
+    Render a datetime in Nepal time. If naive, treat as UTC first, then convert.
+    Example: Tuesday, 16 August 2025 at 03:00 PM NPT
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(NPT).strftime("%A, %d %B %Y at %I:%M %p NPT")
 
 
-# ---------- Helpers ----------
+# Gmail helpers
 def _decode_gmail_body(raw_msg: dict) -> str:
     """Prefer text/plain; fallback to text/html; fallback to top-level body."""
     payload = raw_msg.get("payload", {}) or {}
@@ -46,7 +61,7 @@ def _decode_gmail_body(raw_msg: dict) -> str:
     except Exception:
         return ""
 
-    # If HTML, strip tags (LLM can handle either, but we keep it clean)
+    # If HTML, strip tags
     if "<html" in text.lower() or "<body" in text.lower():
         text = re.sub(r"<[^>]+>", " ", text)
         text = html.unescape(text)
@@ -58,22 +73,23 @@ def _headers_dict(raw_msg: dict) -> Dict[str, str]:
     return {h["name"].lower(): h["value"] for h in payload.get("headers", [])}
 
 
+# Copy / templates
 def _compose_availability_followup(cand: Candidate, mgr: HiringManager) -> str:
     return f"""
 <div style="font-family:Arial,sans-serif;line-height:1.5">
   <p>Hi {mgr.name or 'there'},</p>
   <p>Thanks for confirming you’d like to proceed with <b>{cand.name or 'the candidate'}</b>.</p>
-  <p>Could you please share a few interview time options (date &amp; time, with timezone)?
+  <p>Could you please share a few interview time options <b>(Nepal time)</b>?
      We’ll schedule right away.</p>
   <p>Regards,<br/>HR Team</p>
 </div>
 """.strip()
 
 
+# DB helpers
 def _resolve_candidate_for_manager(session, manager_id: str) -> Optional[Candidate]:
     """
-    Heuristic: most recent candidate under this manager in a stage where replies make sense.
-    Improve later by tracking Gmail threadId on Candidate.
+    Heuristic: pick the most recent candidate under this manager in a sensible stage.
     """
     return (
         session.query(Candidate)
@@ -103,10 +119,7 @@ def _parse_iso_flexible(value: Optional[str]) -> Optional[datetime]:
     return dt.astimezone(timezone.utc)
 
 
-def _fmt_utc(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
-
+# Email to applicant (times rendered in NPT)
 def _email_applicant_request_times(
     session,
     cand: Candidate,
@@ -115,25 +128,30 @@ def _email_applicant_request_times(
     thread_id: Optional[str],
 ):
     """
-    Sends an email to the applicant listing the proposed time(s),
+    Sends a NPT-friendly email to the applicant listing proposed time(s),
     logs outbound Message + ConversationEvent, and updates CandidateStatus.
     """
-    # Build HTML list of proposed times (UTC)
     items = []
     for s in slots:
         st = _parse_iso_flexible(s.get("start"))
         en = _parse_iso_flexible(s.get("end")) if s.get("end") else None
         if not st:
             continue
-        items.append(f"• {_fmt_utc(st)}" + (f" — {_fmt_utc(en)}" if en else ""))
+        if en and en <= st:
+            continue
+        if en:
+            items.append(f"• {_fmt_local(st)} — {_fmt_local(en)}")
+        else:
+            items.append(f"• {_fmt_local(st)}")
 
     choices_html = "<br/>".join(items) if items else "• (time to be confirmed)"
+
     html_body = f"""
-<div style="font-family:Arial,sans-serif;line-height:1.5">
-  <p>Hi {cand.name or 'there'},</p>
-  <p>{mgr.name or 'The hiring manager'} has proposed interview time(s) for <b>{cand.position or 'the role'}</b>.</p>
-  <p><b>Suggested times (UTC):</b><br/>{choices_html}</p>
-  <p>Please reply and let us know which time works for you. If none fit, please propose another time that suits you.</p>
+<div style="font-family: Arial, sans-serif; line-height: 1.6; font-size: 15px; color: #333;">
+  <p>Hi <b>{cand.name or 'there'}</b>,</p>
+  <p><b>{'The hiring manager'}</b> has suggested the following time(s) for your interview for the <b>{cand.position or 'role'}</b> (Nepal time):</p>
+  <p style="margin-left: 10px;">{choices_html}</p>
+  <p>Please reply to let us know which option works best for you. If none of these fit, you can suggest another time that’s convenient for you.</p>
   <p>Best regards,<br/>HR Team</p>
 </div>
 """.strip()
@@ -141,13 +159,13 @@ def _email_applicant_request_times(
     # Email the applicant (same thread if available)
     resp = send_email_html(
         to_email=cand.email,
-        subject=f"Confirm interview time – {cand.position or 'Role'}",
+        subject=f"Please confirm your interview time – {cand.position or 'Role'}",
         html_body=html_body,
         thread_id=thread_id,
     )
     out_id = resp.get("id") if isinstance(resp, dict) else None
 
-    # Log outbound message (sender_email must NOT be NULL)
+    # Log outbound message (sender_email should be set if HR_EMAIL is available)
     out_msg = Message(
         gmail_message_id=out_id or f"local-{datetime.now().timestamp()}",
         gmail_thread_id=thread_id,
@@ -155,7 +173,7 @@ def _email_applicant_request_times(
         manager_id=mgr.id,
         direction="outbound",
         sender_email=HR_EMAIL,
-        subject=f"Confirm interview time – {cand.position or 'Role'}",
+        subject=f"Please confirm your interview time – {cand.position or 'Role'}",
         body=html_body,
         received_at=datetime.now(timezone.utc),
         intent="REQUEST_TIME_CONFIRMATION",
@@ -173,7 +191,6 @@ def _email_applicant_request_times(
         )
     )
 
-    # Snapshot: waiting on the applicant (do NOT set final_meeting_time yet)
     status = session.query(CandidateStatus).filter_by(candidate_id=cand.id).first()
     if not status:
         status = CandidateStatus(candidate_id=cand.id)
@@ -182,16 +199,16 @@ def _email_applicant_request_times(
     session.commit()
 
 
-# ---------- Core ingest ----------
+# Core ingest
 def ingest_manager_replies(limit: int = 25, unread_only: bool = True) -> Dict:
     """
     For each manager in DB:
       - fetch their unread emails,
       - save inbound message,
-      - LLM-parse to intent/meta,
+      - LLM-parse to intent/meta (default tz Asia/Kathmandu),
       - create ConversationEvent,
       - create InterviewSlot when time(s) present,
-      - email applicant immediately to confirm/counter,
+      - email applicant immediately to confirm/counter (NPT rendering),
       - update CandidateStatus (cache),
       - mark as read.
     """
@@ -199,7 +216,7 @@ def ingest_manager_replies(limit: int = 25, unread_only: bool = True) -> Dict:
     try:
         managers: List[HiringManager] = session.query(HiringManager).all()
         if not managers:
-            logging.info("[ingest] No managers found in DB; nothing to ingest.")
+            logging.info("[ingest] No managers found.")
             return {"ok": True, "processed": 0, "skipped": 0, "errors": 0}
 
         processed = skipped = errors = 0
@@ -215,7 +232,7 @@ def ingest_manager_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                     include_unread_only=unread_only,
                 )
             except Exception as ex:
-                logging.exception(f"[ingest] Failed to fetch emails for manager {mgr.email}: {ex}")
+                logging.exception(f"[ingest] Fetch failed for {mgr.email}: {ex}")
                 errors += 1
                 continue
 
@@ -223,7 +240,6 @@ def ingest_manager_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                 try:
                     cand = _resolve_candidate_for_manager(session, mgr.id)
                     if not cand:
-                        logging.info(f"[ingest] No candidate found for manager {mgr.id} ({mgr.email}); skipping this message.")
                         skipped += 1
                         if unread_only:
                             try:
@@ -252,8 +268,12 @@ def ingest_manager_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                     session.add(msg)
                     session.flush()  # msg.id
 
-                    # Parse with LLM
-                    intent, meta = parse_intent_llm(e.get("body") or "")
+                    # Parse with LLM (Nepal default tz + subject for better accuracy)
+                    intent, meta = parse_intent_llm(
+                        e.get("body") or "",
+                        subject=e.get("subject") or "",
+                        default_tz="Asia/Kathmandu",
+                    )
                     msg.intent = intent
                     msg.meta_json = meta or None
                     session.flush()
@@ -279,26 +299,19 @@ def ingest_manager_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                         # Support single ISO or multiple proposed slots
                         slots_meta: List[dict] = []
                         if meta:
-                            # Always include meeting_iso if given
                             if meta.get("meeting_iso"):
                                 slots_meta.append({"start": meta["meeting_iso"], "end": None})
-
-                            # Include all proposed_slots if given
                             if isinstance(meta.get("proposed_slots"), list):
                                 for s in meta["proposed_slots"]:
                                     if isinstance(s, dict) and s.get("start"):
                                         slots_meta.append({"start": s["start"], "end": s.get("end")})
 
-
                         created_any = False
                         for s in slots_meta:
                             st = _parse_iso_flexible(s.get("start"))
                             en = _parse_iso_flexible(s.get("end")) if s.get("end") else None
-                            if not st:
+                            if not st or (en and en <= st):
                                 continue
-                            if en and en <= st:
-                                continue
-
                             session.add(
                                 InterviewSlot(
                                     candidate_id=cand.id,
@@ -309,14 +322,11 @@ def ingest_manager_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                                     source_message_id=msg.id,
                                 )
                             )
-                            session.flush()
                             created_any = True
 
-                        # We are now waiting on the applicant (do NOT set final_meeting_time yet)
                         status.current_status = "Awaiting Candidate Confirmation"
                         session.commit()
 
-                        # Immediately email the applicant to confirm/counter, listing the times
                         if created_any:
                             _email_applicant_request_times(
                                 session,
@@ -326,7 +336,6 @@ def ingest_manager_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                                 thread_id=msg.gmail_thread_id,
                             )
 
-                        # Done with this email
                         if unread_only:
                             try:
                                 mark_read(e["id"])
@@ -337,7 +346,6 @@ def ingest_manager_replies(limit: int = 25, unread_only: bool = True) -> Dict:
 
                     elif intent == "SALARY_DISCUSSION" and meta and meta.get("salary_amount"):
                         status.current_status = "Salary Discussed"
-                        # Salary remains in ConversationEvent/Message meta; no cached salary field now.
 
                     elif intent == "REJECTION":
                         status.current_status = "Rejected by Manager"
@@ -407,12 +415,6 @@ def ingest_manager_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                             pass
 
         return {"ok": True, "processed": processed, "skipped": skipped, "errors": errors}
-
     finally:
         session.close()
 
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-    res = ingest_manager_replies(limit=25, unread_only=True)
-    logging.info(f"[ingest_manager_replies] {res}")
