@@ -1,7 +1,7 @@
 import logging
 import re
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timezone,  timedelta
 from typing import Dict, List, Optional
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
@@ -18,6 +18,8 @@ from database.models import (
 from mail.mail_receiver import get_emails_from_sender, mark_read
 from mail.mail_sender import send_email_html
 from services.intent_parser_llm import parse_intent_llm
+from services.google_calendar_service import create_event_with_meet
+from services.google_calendar_service import create_event_with_meet
 
 load_dotenv(override=True)
 HR_EMAIL = os.getenv("SENDER_EMAIL")
@@ -184,7 +186,7 @@ def ingest_candidate_replies(limit: int = 25, unread_only: bool = True) -> Dict:
     """
     Polls inbox for emails FROM each candidate email.
     Uses LLM to parse intent and times (default tz Asia/Kathmandu).
-    - If candidate accepts a time that matches a manager slot -> mark accepted, update status.final_meeting_time, email manager (agreed).
+    - If candidate accepts a time that matches a manager slot -> mark accepted, update status.final_meeting_time, email manager (agreed) + create Google Meet link.
     - If candidate proposes different time(s) -> create InterviewSlot(proposed_by='applicant'), status='proposed', email manager (confirm?).
     """
     session = SessionLocal()
@@ -201,7 +203,6 @@ def ingest_candidate_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                 continue
 
             try:
-                # Reuse get_emails_from_sender: pass candidate email as the "sender" filter
                 emails = get_emails_from_sender(
                     manager_email=cand.email,
                     limit=limit,
@@ -217,17 +218,14 @@ def ingest_candidate_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                 skipped += len(emails)
                 continue
 
-            # Pull most recent open manager slots once per batch
             open_mgr_slots = _latest_open_manager_slots(session, cand.id)
 
             for e in emails:
                 try:
-                    # Normalize "from" header to plain email
                     raw_from = (e.get("from") or "").strip()
                     em_match = re.search(r"<([^>]+)>", raw_from)
                     from_email = (em_match.group(1) if em_match else raw_from).lower()
 
-                    # Save inbound message (candidate -> inbound)
                     msg = Message(
                         gmail_message_id=e["id"],
                         gmail_thread_id=e["threadId"],
@@ -242,7 +240,6 @@ def ingest_candidate_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                     session.add(msg)
                     session.flush()
 
-                    # LLM parse (bias to NPT)
                     intent, meta = parse_intent_llm(
                         e.get("body") or "",
                         subject=e.get("subject") or "",
@@ -252,17 +249,14 @@ def ingest_candidate_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                     msg.meta_json = meta or None
                     session.flush()
 
-                    # Ensure CandidateStatus exists
                     status = session.query(CandidateStatus).filter_by(candidate_id=cand.id).first()
                     if not status:
                         status = CandidateStatus(candidate_id=cand.id)
                         session.add(status)
 
-                    # Decide: accepted vs proposed_new
                     accepted_slot: Optional[InterviewSlot] = None
                     created_applicant_slots: List[InterviewSlot] = []
 
-                    # Gather candidate-provided times
                     candidate_slots: List[dict] = []
                     if meta:
                         if meta.get("meeting_iso"):
@@ -272,7 +266,6 @@ def ingest_candidate_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                                 if isinstance(s, dict) and s.get("start"):
                                     candidate_slots.append({"start": s["start"], "end": s.get("end")})
 
-                    # Try to match with manager's open proposed slots
                     for s in candidate_slots:
                         st = _parse_iso_flexible(s.get("start"))
                         en = _parse_iso_flexible(s.get("end")) if s.get("end") else None
@@ -281,16 +274,14 @@ def ingest_candidate_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                         match = _find_matching_manager_slot(open_mgr_slots, st, en)
                         if match:
                             accepted_slot = match
-                            # Normalize end if candidate provided but manager didn't
                             if en and not match.end_time:
                                 match.end_time = en
                             match.status = "accepted"
                             status.current_status = "Interview Confirmed"
-                            status.final_meeting_time = match.start_time  # stored UTC
+                            status.final_meeting_time = match.start_time
                             break
 
                     if accepted_slot:
-                        # Log event + email manager (agreed)
                         session.add(ConversationEvent(
                             candidate_id=cand.id,
                             event_type="CANDIDATE_ACCEPTED",
@@ -303,6 +294,31 @@ def ingest_candidate_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                         ))
                         session.commit()
 
+                        # === Create Google Calendar Event with Meet link ===
+                        calendar_result = create_event_with_meet(
+                            summary=f"Interview: {cand.name} – {cand.position}",
+                            description="Interview between candidate and hiring manager",
+                            start_dt=accepted_slot.start_time,
+                            end_dt=accepted_slot.end_time or (accepted_slot.start_time + timedelta(hours=1)),
+                            attendees=[cand.email, mgr.email, HR_EMAIL]
+                        )
+
+                        if calendar_result:
+                            status.notes = f"Google Calendar Event ID: {calendar_result['event_id']}"
+                            session.commit()
+
+                            meet_link = calendar_result["hangoutLink"]
+                            send_email_html(
+                                to_email=cand.email,
+                                subject=f"Interview scheduled – {cand.position}",
+                                html_body=f"Your interview is confirmed.<br/>Meet link: <a href='{meet_link}'>{meet_link}</a>",
+                            )
+                            send_email_html(
+                                to_email=mgr.email,
+                                subject=f"Interview scheduled with {cand.name}",
+                                html_body=f"The interview is confirmed.<br/>Meet link: <a href='{meet_link}'>{meet_link}</a>",
+                            )
+
                         _email_manager_agreed(
                             cand,
                             mgr,
@@ -312,7 +328,6 @@ def ingest_candidate_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                         )
 
                     else:
-                        # No match to manager slots -> treat as new proposal(s) by applicant
                         for s in candidate_slots:
                             st = _parse_iso_flexible(s.get("start"))
                             en = _parse_iso_flexible(s.get("end")) if s.get("end") else None
@@ -330,7 +345,6 @@ def ingest_candidate_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                             session.flush()
                             created_applicant_slots.append(new_slot)
 
-                        # Update status + notify manager
                         if created_applicant_slots:
                             status.current_status = "Awaiting Manager Confirmation"
                             session.add(ConversationEvent(
@@ -349,7 +363,6 @@ def ingest_candidate_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                             ))
                             session.commit()
 
-                            # Build slots payload for email (ISO; rendered to NPT in composer)
                             email_slots = [
                                 {"start": s.start_time.isoformat(), "end": s.end_time.isoformat() if s.end_time else None}
                                 for s in created_applicant_slots
@@ -361,7 +374,6 @@ def ingest_candidate_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                                 thread_id=msg.gmail_thread_id,
                             )
                         else:
-                            # Could not parse any time -> still let manager know with the raw message
                             session.add(ConversationEvent(
                                 candidate_id=cand.id,
                                 event_type="CANDIDATE_REPLIED_NO_TIME",
@@ -387,7 +399,6 @@ def ingest_candidate_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                                 thread_id=msg.gmail_thread_id,
                             )
 
-                    # Mark as read after processing
                     if unread_only:
                         try:
                             mark_read(e["id"])

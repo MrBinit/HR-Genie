@@ -20,11 +20,11 @@ CLIENT_SECRET_PATH = os.getenv("CLIENT_SECRET_PATH", "/app/mail/credits.json")
 TOKEN_PATH         = os.getenv("TOKEN_PATH", "/app/mail/token.json")
 
 SCOPES = [
+    "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.modify",
-    "https://www.googleapis.com/auth/gmail.send",
+    "https://www.googleapis.com/auth/calendar"
 ]
-
 def get_gmail_service():
     creds = None
     if TOKEN_PATH and os.path.exists(TOKEN_PATH):
