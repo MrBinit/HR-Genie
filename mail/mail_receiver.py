@@ -1,9 +1,9 @@
 # mail/mail_receiver.py
-import base64, re
+import base64
+import re
 from typing import Dict, List
 from mail.mail_sender import get_gmail_service
 
-SENDER_FILTER = "b.sapkota.747@westcliff.edu"
 
 def _decode_body(msg) -> str:
     payload = msg.get("payload", {}) or {}
@@ -23,11 +23,20 @@ def _decode_body(msg) -> str:
     text = base64.urlsafe_b64decode(data).decode(errors="ignore")
     return re.sub(r"<[^>]+>", " ", text).strip()
 
-def get_emails_from_sender(limit: int = 10, include_unread_only: bool = True) -> List[Dict]:
+
+def get_emails_from_sender(manager_email: str, limit: int = 10, include_unread_only: bool = True) -> List[Dict]:
+    """
+    Fetch emails from the given sender (manager's email).
+    """
+    if not manager_email:
+        raise ValueError("manager_email is required")
+
     service = get_gmail_service()
-    q = f'from:{SENDER_FILTER}'
+
+    q = f'from:{manager_email}'
     if include_unread_only:
         q += ' is:unread in:inbox'
+
     res = service.users().messages().list(userId="me", q=q, maxResults=limit).execute()
     msgs = res.get("messages", []) or []
     out: List[Dict] = []
@@ -47,16 +56,18 @@ def get_emails_from_sender(limit: int = 10, include_unread_only: bool = True) ->
         })
     return out
 
+
 def mark_read(message_id: str) -> None:
     service = get_gmail_service()
     service.users().messages().modify(
         userId="me", id=message_id, body={"removeLabelIds": ["UNREAD"]}
     ).execute()
 
-def print_from_sender(limit: int = 10, include_unread_only: bool = True, mark_as_read: bool = False):
-    emails = get_emails_from_sender(limit=limit, include_unread_only=include_unread_only)
+
+def print_from_sender(manager_email: str, limit: int = 10, include_unread_only: bool = True, mark_as_read: bool = False):
+    emails = get_emails_from_sender(manager_email=manager_email, limit=limit, include_unread_only=include_unread_only)
     if not emails:
-        print(f"No emails found from {SENDER_FILTER}" + (" (unread only)" if include_unread_only else ""))
+        print(f"No emails found from {manager_email}" + (" (unread only)" if include_unread_only else ""))
         return
     for e in emails:
         print("=" * 70)
@@ -74,5 +85,3 @@ def print_from_sender(limit: int = 10, include_unread_only: bool = True, mark_as
             except Exception as ex:
                 print(f"[WARN] Failed to mark as read: {e['id']} -> {ex}")
 
-if __name__ == "__main__":
-    print_from_sender(limit=5, include_unread_only=True, mark_as_read=False)

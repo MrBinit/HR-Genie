@@ -190,15 +190,29 @@ class ConversationEvent(Base):
 
 
 class CandidateStatus(Base):
-    """
-    Denormalized snapshot of latest state for fast UI loads.
-    This is a convenience table; the source of truth is in messages/events.
-    """
     __tablename__ = "candidate_status"
 
     id = Column(Integer, primary_key=True)
     candidate_id = Column(Integer, ForeignKey("candidates.id", ondelete="CASCADE"), unique=True, index=True)
-    current_status = Column(String, index=True)          # 'Interview Scheduled', 'Offered', 'Rejected', etc.
-    last_meeting_time = Column(TIMESTAMP, nullable=True)
-    last_salary_offer = Column(Integer, nullable=True)
+
+    current_status = Column(String, index=True)  # 'Interview Scheduled', 'Offered', etc.
+    final_meeting_time = Column(TIMESTAMP, nullable=True)  # Agreed slot start
+
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now(), index=True)
+
+
+class InterviewSlot(Base):
+    __tablename__ = "interview_slots"
+
+    id = Column(Integer, primary_key=True)
+    candidate_id = Column(Integer, ForeignKey("candidates.id", ondelete="CASCADE"), index=True)
+    proposed_by = Column(String, nullable=False)  # 'manager' | 'applicant'
+    start_time = Column(TIMESTAMP, nullable=False)
+    end_time = Column(TIMESTAMP, nullable=True)
+    status = Column(String, nullable=False, default="proposed", index=True)
+    source_message_id = Column(Integer, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now(), index=True)
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now(), index=True)
+
+    candidate = relationship("Candidate")
+    source_message = relationship("Message")
