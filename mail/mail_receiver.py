@@ -3,7 +3,7 @@ import base64, re
 from typing import Dict, List
 from mail.mail_sender import get_gmail_service
 
-SENDER_FILTER = "srijanthapa70@gmail.com"
+SENDER_FILTER = "b.sapkota.747@westcliff.edu"
 
 def _decode_body(msg) -> str:
     payload = msg.get("payload", {}) or {}

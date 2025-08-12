@@ -1,14 +1,21 @@
 from sqlalchemy import (
-    Column, Integer, String, Text, TIMESTAMP, Date, Numeric,
-    Boolean, ForeignKey, Float, UniqueConstraint, func
+    Column,
+    Integer,
+    String,
+    Text,
+    TIMESTAMP,
+    Date,
+    Numeric,
+    Boolean,
+    ForeignKey,
+    Float,
+    UniqueConstraint,
+    func,
+    text,
 )
-from sqlalchemy.orm import relationship
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey
 from sqlalchemy.orm import relationship
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.dialects.postgresql import BOOLEAN
-from sqlalchemy import text
+from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 
 
 Base = declarative_base()
@@ -32,14 +39,32 @@ class Candidate(Base):
     is_internal = Column(BOOLEAN, nullable=False, server_default=text('false'))
     summary = Column(Text, nullable=True)
     candidate_pitch = Column(Text, nullable=True)
-    manager_email_body = Column(Text, nullable=True) 
+    manager_email_body = Column(Text, nullable=True)
 
 
     job_description = relationship("JobDescription", back_populates="candidates")
     manager = relationship("HiringManager", back_populates="candidates")
     department = relationship("Department")
 
-    referrals = relationship("Referral", back_populates="candidate", cascade="all, delete-orphan")
+    referrals = relationship(
+        "Referral",
+        back_populates="candidate",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    messages = relationship(
+        "Message",
+        back_populates="candidate",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+    events = relationship(
+        "ConversationEvent",
+        back_populates="candidate",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
 
 class Referral(Base):
     __tablename__ = "referrals"
@@ -114,3 +139,66 @@ class Employee(Base):
     salary = Column(Numeric(12, 2), nullable=True)
     department_id = Column(String, ForeignKey("departments.id"), nullable=True)
     department = relationship("Department", back_populates="employees")
+
+
+class Message(Base):
+    """
+    Immutable log of inbound/outbound messages (email) related to a candidate.
+    Stores thread/message IDs for Gmail, parsed intent and structured metadata.
+    """
+    __tablename__ = "messages"
+
+    id = Column(Integer, primary_key=True)
+    gmail_message_id = Column(String, unique=True, nullable=False)
+    gmail_thread_id = Column(String, index=True)
+
+    candidate_id = Column(Integer, ForeignKey("candidates.id", ondelete="CASCADE"), index=True)
+    manager_id = Column(String, ForeignKey("hiring_managers.id"), index=True)
+
+    direction = Column(String, nullable=False)  # 'inbound' | 'outbound'
+    sender_email = Column(String, nullable=False, index=True)
+    subject = Column(String)
+    body = Column(Text)
+    received_at = Column(TIMESTAMP, server_default=func.now(), index=True)
+
+    intent = Column(String, nullable=True, index=True)   # e.g. 'MEETING_SCHEDULED', 'REJECTION', 'SALARY_DISCUSSION'
+    meta_json = Column(JSONB, nullable=True)             # {'date': '2025-08-12', 'time': '14:00', 'salary': 75000}
+
+    # relationships
+    candidate = relationship("Candidate", back_populates="messages")
+    manager = relationship("HiringManager")
+
+
+class ConversationEvent(Base):
+    """
+    Structured, searchable events extracted from messages:
+      MEETING_SCHEDULED, SALARY_DISCUSSION, REJECTION, etc.
+    Links back to the source message for auditability.
+    """
+    __tablename__ = "conversation_events"
+
+    id = Column(Integer, primary_key=True)
+    candidate_id = Column(Integer, ForeignKey("candidates.id", ondelete="CASCADE"), index=True)
+    event_type = Column(String, nullable=False, index=True)
+    event_data = Column(JSONB, nullable=True)            # {'date':..., 'time':..., 'salary':..., 'notes':...}
+    source_message_id = Column(Integer, ForeignKey("messages.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at = Column(TIMESTAMP, server_default=func.now(), index=True)
+
+    # relationships
+    candidate = relationship("Candidate", back_populates="events")
+    source_message = relationship("Message")
+
+
+class CandidateStatus(Base):
+    """
+    Denormalized snapshot of latest state for fast UI loads.
+    This is a convenience table; the source of truth is in messages/events.
+    """
+    __tablename__ = "candidate_status"
+
+    id = Column(Integer, primary_key=True)
+    candidate_id = Column(Integer, ForeignKey("candidates.id", ondelete="CASCADE"), unique=True, index=True)
+    current_status = Column(String, index=True)          # 'Interview Scheduled', 'Offered', 'Rejected', etc.
+    last_meeting_time = Column(TIMESTAMP, nullable=True)
+    last_salary_offer = Column(Integer, nullable=True)
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now(), index=True)

@@ -17,7 +17,7 @@ def prompt_resume(
 
     system = (
         "You are a senior HR analyst. Critically evaluate the candidate's resume against the job description.\n"
-        "Today's date is 2025-08-09.\n"
+        "Today's date is 2025-08-09 and people before that will be graduate from the University.\n"
         "Use ONLY the content provided below. Do NOT guess or add facts not present in the text.\n"
         "Scoring: 0.0–10.0 (one decimal). Clamp to this range. "
         "Be consistent and justify via the comparison fields.\n"
@@ -61,7 +61,7 @@ def prompt_resume_summary(section_name: str, section_text: str) -> str:
     system = (
         "You are a helpful HR assistant. Your task is to summarize a specific section "
         "of a candidate's resume in a short, clear way.\n"
-        "Today's date is 2025-08-09.\n"
+        "Today's date is 2025-08-09 so resume before that will graduate from the University...\n"
         "Formatting rules:\n"
         "- Use concise bullet points (•) for each key detail.\n"
         "- Focus on concrete skills, achievements, and relevant facts.\n"
@@ -157,6 +157,7 @@ Email requirements:
    - Ask whether we should move ahead with the resume or reject it.
    - If moving ahead, ask for the manager's preferred time window to schedule the meeting.
 6) Keep tone direct, courteous, professional.
+7) End the email with: <p>Best regards,<br>HireGenie</p>
 
 Return ONLY the HTML snippet — no plain text before or after.
 """

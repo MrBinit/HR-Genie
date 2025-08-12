@@ -23,7 +23,7 @@ from mail.notify_manager import notify_manager_if_pass
 from mail.mail_sender import send_email_html
 from apscheduler.schedulers.background import BackgroundScheduler
 from mail.auto_reject import auto_reject_candidates
-
+from mail.manager_reply_ingest import ingest_manager_replies
 
 # from mail.notify_manager import notify_manager_if_pass
 
@@ -37,6 +37,7 @@ JOB_DESCRIPTION_DIR.mkdir(parents=True, exist_ok=True)
 RESUME_INPUT_PATH.mkdir(parents=True, exist_ok=True)
 RESUME_OUTPUT_PATH = pathlib.Path(os.getenv("RESUME_OUTPUT_PATH", "/app/data/resume_extractor"))
 THRESHOLD = float(os.getenv("THRESHOLD", "6.0"))
+REFERRAL_POINT = float(os.getenv("REFERRAL_POINT", "1.0"))
 # Logging setup
 logging.basicConfig(
     level=logging.INFO,
@@ -153,10 +154,11 @@ async def upload_resume(file: UploadFile = File(...),
             notify_result = {"ok": True, "notified": False}
             if candidate_to_update.status == "Received" and (score is not None) and (score >= THRESHOLD):
                 notify_result = notify_manager_if_pass(candidate_id=candidate_to_update.id)
-                if notify_result.get("ok") and notify_result.get("notified") and notify_result.get("email_body"):
-                    candidate_to_update.manager_email_body = notify_result["email_body"]  # <-- FIXED
-                    db.commit()
 
+                # Save the manager's email body into the DB
+                if notify_result.get("ok") and notify_result.get("notified") and notify_result.get("email_body"):
+                    candidate_to_update.manager_email_body = notify_result["email_body"]
+                    db.commit()
         except IntegrityError:
             db.rollback()
             logging.warning("Candidate with this email already exists.")
@@ -511,7 +513,7 @@ def create_internal_referral_by_employee_email(
 
         # +1 only on the first internal referral and only if there is a score
         if not already_internal and cand.cv_score is not None:
-            cand.cv_score = min(float(cand.cv_score) + 1.0, 10.0)  # optional cap
+            cand.cv_score = min(float(cand.cv_score) + REFERRAL_POINT, 10.0)  # optional cap
 
         cand.is_internal = True
 
@@ -614,3 +616,12 @@ def _shutdown_scheduler():
         scheduler.shutdown(wait=False)
     except Exception:
         pass
+
+
+
+def _ingest_job():
+    res = ingest_manager_replies()
+    logging.info(f"[ingest_job] {res}")
+
+# every minute (or whatever you want)
+scheduler.add_job(_ingest_job, "interval", minutes=1)
