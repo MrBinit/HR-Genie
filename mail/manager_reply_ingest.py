@@ -30,6 +30,13 @@ if not HR_EMAIL:
 # Nepal Time
 NPT = ZoneInfo("Asia/Kathmandu")
 
+# quick confirm detector (manager replies like "yes, I agree", "works for me", etc.)
+_QUICK_CONFIRM = re.compile(
+    r"\b(i\s*agree|agree|works\s*for\s*me|sounds\s*good|ok(?:ay)?|confirmed|let'?s\s+go\s+with\s+that)\b",
+    re.IGNORECASE,
+)
+
+
 def _fmt_local(dt: datetime) -> str:
     """
     Render a datetime in Nepal time. If naive, treat as UTC first, then convert.
@@ -119,6 +126,37 @@ def _parse_iso_flexible(value: Optional[str]) -> Optional[datetime]:
     return dt.astimezone(timezone.utc)
 
 
+def _ensure_aware(dt: datetime) -> datetime:
+    """Ensure tz-aware in UTC."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _within_tolerance(a: datetime, b: datetime, minutes: int = 5) -> bool:
+    a = _ensure_aware(a)
+    b = _ensure_aware(b)
+    return abs((a - b).total_seconds()) <= minutes * 60
+
+
+def _latest_open_applicant_slots(session, candidate_id: int, limit: int = 10) -> List[InterviewSlot]:
+    """
+    Return applicant-proposed slots still in 'proposed' status (i.e., not accepted/declined).
+    Newest first.
+    """
+    return (
+        session.query(InterviewSlot)
+        .filter(
+            InterviewSlot.candidate_id == candidate_id,
+            InterviewSlot.proposed_by == "applicant",
+            InterviewSlot.status == "proposed",
+        )
+        .order_by(InterviewSlot.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+
 # Email to applicant (times rendered in NPT)
 def _email_applicant_request_times(
     session,
@@ -197,6 +235,54 @@ def _email_applicant_request_times(
         session.add(status)
     status.current_status = "Awaiting Candidate Confirmation"
     session.commit()
+
+
+def _email_manager_confirmed(
+    cand: Candidate,
+    mgr: HiringManager,
+    start_dt: datetime,
+    end_dt: Optional[datetime],
+    thread_id: Optional[str],
+):
+    when_npt = _fmt_local(start_dt) + (f" — {_fmt_local(end_dt)}" if end_dt else "")
+    html_body = f"""
+<div style="font-family:Arial,sans-serif;line-height:1.6;font-size:15px;color:#222;">
+  <p>Hi <b>{mgr.name or 'there'}</b>,</p>
+  <p>Interview with <b>{cand.name}</b> for <b>{cand.position or 'the role'}</b> is <b>confirmed</b>.</p>
+  <p><b>Final time (Nepal time):</b><br/>{when_npt}</p>
+  <p>Best regards,<br/>HR Team</p>
+</div>
+""".strip()
+    send_email_html(
+        to_email=mgr.email,
+        subject=f"Interview confirmed – {cand.name}",
+        html_body=html_body,
+        thread_id=thread_id,
+    )
+
+
+def _email_applicant_confirmed(
+    cand: Candidate,
+    start_dt: datetime,
+    end_dt: Optional[datetime],
+    thread_id: Optional[str],
+):
+    when_npt = _fmt_local(start_dt) + (f" — {_fmt_local(end_dt)}" if end_dt else "")
+    html_body = f"""
+<div style="font-family:Arial,sans-serif;line-height:1.6;font-size:15px;color:#222;">
+  <p>Hi <b>{cand.name}</b>,</p>
+  <p>The hiring manager has <b>confirmed</b> your interview for <b>{cand.position or 'the role'}</b>.</p>
+  <p><b>Final time (Nepal time):</b><br/>{when_npt}</p>
+  <p>You’ll receive a calendar invite shortly.</p>
+  <p>Best regards,<br/>HR Team</p>
+</div>
+""".strip()
+    send_email_html(
+        to_email=cand.email,
+        subject=f"Your interview is confirmed – {cand.position or 'the role'}",
+        html_body=html_body,
+        thread_id=thread_id,
+    )
 
 
 # Core ingest
@@ -293,6 +379,76 @@ def ingest_manager_replies(limit: int = 25, unread_only: bool = True) -> Dict:
                     if not status:
                         status = CandidateStatus(candidate_id=cand.id)
                         session.add(status)
+
+                    # === Manager says "yes / I agree" to applicant-proposed time → finalize ===
+                    is_quick_agree = bool(_QUICK_CONFIRM.search(e.get("body") or ""))
+                    is_llm_confirm = str(intent or "").upper() in {
+                        "CONFIRM", "CONFIRMED", "AGREE", "AGREED", "ACCEPT", "ACCEPTED"
+                    }
+
+                    if is_quick_agree or is_llm_confirm:
+                        # Find applicant-proposed, still-open slots
+                        applicant_slots = _latest_open_applicant_slots(session, cand.id, limit=5)
+
+                        # Try to match a specific time if LLM extracted one; else fall back to latest applicant slot
+                        target_start = _parse_iso_flexible((meta or {}).get("meeting_iso")) if meta else None
+                        target_end = None
+                        if not target_start and isinstance((meta or {}).get("proposed_slots"), list):
+                            for s in meta["proposed_slots"]:
+                                if s.get("start"):
+                                    target_start = _parse_iso_flexible(s["start"])
+                                    target_end = _parse_iso_flexible(s.get("end")) if s.get("end") else None
+                                    break
+
+                        match_slot = None
+                        if target_start:
+                            for s in applicant_slots:
+                                if _within_tolerance(s.start_time, target_start, minutes=5):
+                                    match_slot = s
+                                    # If LLM provided an end time while slot has none, store it
+                                    if target_end and not s.end_time:
+                                        s.end_time = target_end
+                                    break
+
+                        if not match_slot and applicant_slots:
+                            match_slot = applicant_slots[0]  # most recent applicant proposal
+
+                        if match_slot:
+                            match_slot.status = "accepted"
+
+                            status.current_status = "Interview Confirmed"
+                            status.final_meeting_time = _ensure_aware(match_slot.start_time)
+
+                            session.add(
+                                ConversationEvent(
+                                    candidate_id=cand.id,
+                                    event_type="MANAGER_ACCEPTED",
+                                    event_data={
+                                        "slot_id": match_slot.id,
+                                        "start": match_slot.start_time.isoformat(),
+                                        "end": match_slot.end_time.isoformat() if match_slot.end_time else None,
+                                    },
+                                    source_message_id=msg.id,
+                                )
+                            )
+                            session.commit()
+
+                            # Notify both sides
+                            _email_manager_confirmed(
+                                cand, mgr, match_slot.start_time, match_slot.end_time, thread_id=msg.gmail_thread_id
+                            )
+                            _email_applicant_confirmed(
+                                cand, match_slot.start_time, match_slot.end_time, thread_id=msg.gmail_thread_id
+                            )
+
+                            if unread_only:
+                                try:
+                                    mark_read(e["id"])
+                                except Exception:
+                                    pass
+
+                            processed += 1
+                            continue  # done handling this message
 
                     # Handle intents
                     if intent == "MEETING_SCHEDULED":
@@ -417,4 +573,3 @@ def ingest_manager_replies(limit: int = 25, unread_only: bool = True) -> Dict:
         return {"ok": True, "processed": processed, "skipped": skipped, "errors": errors}
     finally:
         session.close()
-
